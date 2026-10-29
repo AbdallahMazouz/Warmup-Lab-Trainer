@@ -32,6 +32,12 @@ export const TARGET_SPAWN_DIST_MIN  = 4.0;
 export const TARGET_SPAWN_DIST_MAX  = 18.0;
 export const HEAD_LEVEL_Y           = PLAYER_HEIGHT - 0.12; // approx head
 
+// Segmented target dimensions (baseline for 1.0 scale)
+export const TARGET_HEAD_RADIUS     = 0.13; // head sphere radius (metres)
+export const TARGET_TORSO_RADIUS    = 0.18; // torso cylinder radius (metres)
+export const TARGET_TORSO_HEIGHT    = 0.50; // torso cylinder height (metres)
+export const TARGET_TORSO_OFFSET_Y  = -0.38; // torso center Y relative to head (metres)
+
 // Colours
 export const COL_TARGET_IDLE   = 0xff4655;
 export const COL_TARGET_HIT    = 0x00ff88;
@@ -63,6 +69,7 @@ export const DURATION_LONG   = 120;
 export const LS_SETTINGS    = 'vwt_settings_v2';
 export const LS_SESSIONS    = 'vwt_sessions_v2';
 export const LS_PERSONAL_BESTS = 'vwt_pbs_v2';
+export const LS_ROUTINES    = 'vwt_routines_v2';
 
 // Category IDs
 export const CAT_FLICK     = 'flick';

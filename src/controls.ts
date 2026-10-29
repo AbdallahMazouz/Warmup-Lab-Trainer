@@ -39,9 +39,13 @@ export class Controls {
 
   private _onMouseMove = this.onMouseMove.bind(this);
   private _onPointerLockChange = this.onPointerLockChange.bind(this);
+  private _onPointerLockError = this.onPointerLockError.bind(this);
   private _onKeyDown = this.onKeyDown.bind(this);
   private _onKeyUp = this.onKeyUp.bind(this);
   private _onMouseDown = this.onMouseDown.bind(this);
+  private _onBlur = this.resetKeys.bind(this);
+  private _cachedRay = new THREE.Ray();
+  private _lockPending = false;
 
   constructor(camera: THREE.PerspectiveCamera, domElement: HTMLElement) {
     this.camera = camera;
@@ -58,39 +62,77 @@ export class Controls {
   private initEvents(): void {
     document.addEventListener('mousemove', this._onMouseMove, false);
     document.addEventListener('pointerlockchange', this._onPointerLockChange, false);
+    document.addEventListener('pointerlockerror', this._onPointerLockError, false);
     document.addEventListener('keydown', this._onKeyDown, false);
     document.addEventListener('keyup', this._onKeyUp, false);
     document.addEventListener('mousedown', this._onMouseDown, false);
+    if (typeof window !== 'undefined') {
+      window.addEventListener('blur', this._onBlur, false);
+    }
   }
 
   dispose(): void {
     document.removeEventListener('mousemove', this._onMouseMove, false);
     document.removeEventListener('pointerlockchange', this._onPointerLockChange, false);
+    document.removeEventListener('pointerlockerror', this._onPointerLockError, false);
     document.removeEventListener('keydown', this._onKeyDown, false);
     document.removeEventListener('keyup', this._onKeyUp, false);
     document.removeEventListener('mousedown', this._onMouseDown, false);
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('blur', this._onBlur, false);
+    }
   }
 
   lock(): void {
-    this.domElement.requestPointerLock();
+    if (this.domElement.requestPointerLock) {
+      this._lockPending = true;
+      try {
+        const p = this.domElement.requestPointerLock();
+        if (p && typeof (p as any).catch === 'function') {
+          (p as any).catch(() => {
+            this.handleLockFailure();
+          });
+        }
+      } catch {
+        this.handleLockFailure();
+      }
+    } else {
+      this.handleLockFailure();
+    }
   }
 
   unlock(): void {
+    this._lockPending = false;
     if (document.exitPointerLock) {
       document.exitPointerLock();
     }
   }
 
+  private onPointerLockError(): void {
+    this.handleLockFailure();
+  }
+
+  private handleLockFailure(): void {
+    if (!this._lockPending && !this.isLocked) {
+      return;
+    }
+    this._lockPending = false;
+    this.isLocked = false;
+    this.resetKeys();
+    if (this.onLockChange) {
+      this.onLockChange(false);
+    }
+  }
+
   private onPointerLockChange(): void {
-    this.isLocked = document.pointerLockElement === this.domElement;
+    this._lockPending = false;
+    const isNowLocked = document.pointerLockElement === this.domElement;
+    this.isLocked = isNowLocked;
     if (this.onLockChange) {
       this.onLockChange(this.isLocked);
     }
     if (!this.isLocked) {
-      this.moveForward = false;
-      this.moveBackward = false;
-      this.moveLeft = false;
-      this.moveRight = false;
+      this.resetKeys();
     }
   }
 
@@ -125,6 +167,7 @@ export class Controls {
 
   private onKeyDown(event: KeyboardEvent): void {
     if (!this.isLocked) return;
+    if (event.repeat) return;
 
     switch (event.code) {
       case 'KeyW':
@@ -230,11 +273,17 @@ export class Controls {
     this.velocity.set(0, 0, 0);
   }
 
+  resetKeys(): void {
+    this.moveForward = false;
+    this.moveBackward = false;
+    this.moveLeft = false;
+    this.moveRight = false;
+  }
+
   getRay(): THREE.Ray {
-    const ray = new THREE.Ray();
-    this.camera.getWorldPosition(ray.origin);
-    this.camera.getWorldDirection(ray.direction);
-    return ray;
+    this.camera.getWorldPosition(this._cachedRay.origin);
+    this.camera.getWorldDirection(this._cachedRay.direction);
+    return this._cachedRay;
   }
 
   isCounterStrafed(): boolean {

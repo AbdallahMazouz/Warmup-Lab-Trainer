@@ -2,7 +2,7 @@
 // scenarios.ts — Comprehensive Scenario Definitions
 // =====================================================================
 
-import type { ScenarioConfig } from './types';
+import type { ScenarioConfig, DifficultyId, TrainingRoutine } from './types';
 
 export const SCENARIOS: ScenarioConfig[] = [
   // ── A. FLICK TRAINING ──────────────────────────────────────────────
@@ -25,6 +25,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flick-micro',
@@ -45,6 +48,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flick-wide',
@@ -65,6 +71,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flick-multi',
@@ -85,6 +94,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flick-precision',
@@ -105,6 +117,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flick-reactive',
@@ -113,7 +128,7 @@ export const SCENARIOS: ScenarioConfig[] = [
     description: 'Targets have a strict time window before expiring. Tests flick speed under time pressure.',
     skill: 'Speed & Reaction',
     difficulty: 'advanced',
-    durationSec: 45,
+    durationSec: 60,
     targetCount: 1,
     targetSizeMultiplier: 0.95,
     targetSpeedMultiplier: 0,
@@ -125,6 +140,10 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    targetLifetimeSec: 1.2,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
 
   // ── B. TRACKING TRAINING ───────────────────────────────────────────
@@ -147,6 +166,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: false,
+    meaningfulReactionTime: false,
+    meaningfulTracking: true,
+    allowInRoutines: true,
   },
   {
     id: 'track-reactive',
@@ -167,6 +189,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: false,
+    meaningfulReactionTime: false,
+    meaningfulTracking: true,
+    allowInRoutines: true,
   },
   {
     id: 'track-strafe',
@@ -187,6 +212,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: false,
+    meaningfulReactionTime: false,
+    meaningfulTracking: true,
+    allowInRoutines: true,
   },
   {
     id: 'track-vertical',
@@ -207,6 +235,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: false,
+    meaningfulReactionTime: false,
+    meaningfulTracking: true,
+    allowInRoutines: true,
   },
 
   // ── C. VALORANT TACTICAL SCENARIOS ────────────────────────────────
@@ -229,6 +260,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'tactical-jiggle',
@@ -249,6 +283,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'tactical-angle-clear',
@@ -269,6 +306,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'tactical-counter-strafe',
@@ -287,8 +327,11 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashEnabled: false,
     flashIntensity: 0,
     flashDurationMs: 0,
-    requireSteadyAim: true, // Requires player velocity < threshold
+    requireSteadyAim: true,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'tactical-headlevel',
@@ -309,6 +352,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'tactical-firstshot',
@@ -329,6 +375,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: true,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
 
   // ── D. FLASH SIMULATION & RECOVERY ─────────────────────────────────
@@ -351,6 +400,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 1400,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'flash-delayed',
@@ -371,6 +423,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 1200,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
 
   // ── E. REACTION-TIME TRAINING ──────────────────────────────────────
@@ -381,7 +436,7 @@ export const SCENARIOS: ScenarioConfig[] = [
     description: 'Target spawns at random intervals directly in center field. Click as fast as humanly possible.',
     skill: 'Pure Stimulus-to-Input Latency',
     difficulty: 'beginner',
-    durationSec: 45,
+    durationSec: 60,
     targetCount: 1,
     targetSizeMultiplier: 1.3,
     targetSpeedMultiplier: 0,
@@ -393,6 +448,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
   {
     id: 'reaction-peripheral',
@@ -413,6 +471,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 0,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
 
   // ── G. HYBRID SCENARIOS ───────────────────────────────────────────
@@ -423,7 +484,7 @@ export const SCENARIOS: ScenarioConfig[] = [
     description: 'Comprehensive routine combining flicks, tracking, counter-strafing, and wide-swing duels.',
     skill: 'All-Round Valorant Aim',
     difficulty: 'intermediate',
-    durationSec: 90,
+    durationSec: 60,
     targetCount: 2,
     targetSizeMultiplier: 0.9,
     targetSpeedMultiplier: 1.1,
@@ -435,6 +496,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 800,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: true,
+    allowInRoutines: true,
   },
   {
     id: 'hybrid-clutch',
@@ -455,6 +519,9 @@ export const SCENARIOS: ScenarioConfig[] = [
     flashDurationMs: 1000,
     requireSteadyAim: false,
     penalizeMiss: true,
+    meaningfulReactionTime: true,
+    meaningfulTracking: false,
+    allowInRoutines: true,
   },
 ];
 
@@ -467,54 +534,160 @@ export function getScenariosByCategory(category: string): ScenarioConfig[] {
   return SCENARIOS.filter(s => s.category === category);
 }
 
-export interface TrainingRoutine {
-  id: string;
-  name: string;
-  durationLabel: string;
-  description: string;
-  scenarioIds: string[];
-}
+export const ROUTINE_TRANSITION_SEC = 4;
 
 export const TRAINING_ROUTINES: TrainingRoutine[] = [
   {
     id: 'routine-5m',
     name: 'Quick 5-Minute Warm-Up',
-    durationLabel: '5 Min',
+    durationLabel: '5 Min Active (5m 16s Total)',
+    totalDurationSec: 300,
+    activeDurationSec: 300,
+    transitionDurationSec: 16,
+    totalElapsedSec: 316,
     description: 'Fast pre-match routine to warm up wrists, flicks, and head-level crosshair placement.',
-    scenarioIds: ['flick-static', 'track-smooth', 'tactical-wideswing', 'tactical-angle-clear', 'reaction-visual'],
+    scenarioIds: [
+      'flick-static',
+      'track-smooth',
+      'tactical-wideswing',
+      'tactical-angle-clear',
+      'reaction-visual',
+    ],
   },
   {
     id: 'routine-10m',
     name: 'Standard 10-Minute Valorant Routine',
-    durationLabel: '10 Min',
+    durationLabel: '10 Min Active (10m 36s Total)',
+    totalDurationSec: 600,
+    activeDurationSec: 600,
+    transitionDurationSec: 36,
+    totalElapsedSec: 636,
     description: 'Balanced routine covering flicks, micro-adjustments, strafe tracking, jiggle peeks, and counter-strafing.',
     scenarioIds: [
       'flick-static',
       'flick-micro',
+      'track-smooth',
       'track-strafe',
+      'tactical-wideswing',
       'tactical-jiggle',
       'tactical-counter-strafe',
       'tactical-headlevel',
       'flash-pop',
-      'hybrid-tactical-warmup',
+      'hybrid-clutch',
     ],
   },
   {
     id: 'routine-20m',
     name: 'Pro Aim Conditioning 20-Minute',
-    durationLabel: '20 Min',
+    durationLabel: '20 Min Active (21m 16s Total)',
+    totalDurationSec: 1200,
+    activeDurationSec: 1200,
+    transitionDurationSec: 76,
+    totalElapsedSec: 1276,
     description: 'Full tournament-grade workout for precision, reactive tracking, flash recovery, and high-pressure clutches.',
     scenarioIds: [
-      'flick-precision',
+      'flick-static',
+      'flick-micro',
+      'flick-wide',
       'flick-multi',
+      'flick-precision',
+      'flick-reactive',
+      'track-smooth',
       'track-reactive',
+      'track-strafe',
       'track-vertical',
       'tactical-wideswing',
-      'tactical-firstshot',
+      'tactical-jiggle',
+      'tactical-angle-clear',
       'tactical-counter-strafe',
+      'tactical-headlevel',
+      'tactical-firstshot',
+      'flash-pop',
       'flash-delayed',
+      'reaction-visual',
       'hybrid-clutch',
-      'flick-reactive',
     ],
   },
 ];
+
+export function getRoutineDuration(routine: TrainingRoutine): number {
+  return routine.scenarioIds.reduce((sum, sid) => {
+    const sc = getScenarioById(sid);
+    return sum + (sc ? sc.durationSec : 0);
+  }, 0);
+}
+
+export function getRoutineActiveDuration(routine: TrainingRoutine): number {
+  return getRoutineDuration(routine);
+}
+
+export function getRoutineTransitionDuration(routine: TrainingRoutine): number {
+  const transitionsCount = Math.max(0, routine.scenarioIds.length - 1);
+  return transitionsCount * ROUTINE_TRANSITION_SEC;
+}
+
+export function getRoutineTotalElapsedDuration(routine: TrainingRoutine): number {
+  return getRoutineActiveDuration(routine) + getRoutineTransitionDuration(routine);
+}
+
+export interface DifficultyPreset {
+  difficulty: DifficultyId;
+  label: string;
+  speedMultiplier: number;
+  directionChangeMultiplier: number;
+  targetLifetimeMultiplier?: number;
+}
+
+export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
+  beginner: {
+    difficulty: 'beginner',
+    label: 'Beginner',
+    speedMultiplier: 0.75,
+    directionChangeMultiplier: 0.7,
+    targetLifetimeMultiplier: 1.3,
+  },
+  intermediate: {
+    difficulty: 'intermediate',
+    label: 'Intermediate',
+    speedMultiplier: 1.0,
+    directionChangeMultiplier: 1.0,
+    targetLifetimeMultiplier: 1.0,
+  },
+  advanced: {
+    difficulty: 'advanced',
+    label: 'Advanced',
+    speedMultiplier: 1.35,
+    directionChangeMultiplier: 1.35,
+    targetLifetimeMultiplier: 0.75,
+  },
+  pro: {
+    difficulty: 'pro',
+    label: 'Pro',
+    speedMultiplier: 1.6,
+    directionChangeMultiplier: 1.6,
+    targetLifetimeMultiplier: 0.6,
+  },
+};
+
+export function applyDifficultyPreset(
+  baseConfig: ScenarioConfig,
+  difficulty: DifficultyId
+): ScenarioConfig {
+  const pristine = getScenarioById(baseConfig.id) ?? baseConfig;
+  const preset = DIFFICULTY_PRESETS[difficulty] ?? DIFFICULTY_PRESETS.intermediate;
+  const rawSpeed = pristine.targetSpeedMultiplier * preset.speedMultiplier;
+  const speed = Math.max(0, Math.min(3.5, rawSpeed));
+  const rawDirChange = preset.directionChangeMultiplier;
+  const dirChange = Math.max(0.2, Math.min(3.0, rawDirChange));
+  const lifetime = pristine.targetLifetimeSec
+    ? Math.max(0.3, Math.min(10.0, pristine.targetLifetimeSec * (preset.targetLifetimeMultiplier ?? 1)))
+    : undefined;
+
+  return {
+    ...pristine,
+    difficulty,
+    targetSpeedMultiplier: Number(speed.toFixed(2)),
+    directionChangeMultiplier: Number(dirChange.toFixed(2)),
+    targetLifetimeSec: lifetime !== undefined ? Number(lifetime.toFixed(2)) : undefined,
+  };
+}
