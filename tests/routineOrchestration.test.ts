@@ -372,8 +372,8 @@ describe('Sprint 2D — Store Robustness & PB Matching', () => {
     store = new Store();
   });
 
-  it('caps sessions at 50 and ignores duplicate session IDs', () => {
-    for (let i = 0; i < 60; i++) {
+  it('caps sessions at 100 and ignores duplicate session IDs', () => {
+    for (let i = 0; i < 110; i++) {
       store.addSession({
         id: `sess_${i}`,
         scenarioId: 'flick-static',
@@ -394,11 +394,11 @@ describe('Sprint 2D — Store Robustness & PB Matching', () => {
       });
     }
 
-    expect(store.totalSessions()).toBe(50);
+    expect(store.totalSessions()).toBe(100);
 
     // Attempt to add duplicate ID
     const dupRes = store.addSession({
-      id: 'sess_59',
+      id: 'sess_109',
       scenarioId: 'flick-static',
       scenarioName: 'Static Flicks',
       category: 'flick',
@@ -417,7 +417,7 @@ describe('Sprint 2D — Store Robustness & PB Matching', () => {
     });
 
     expect(dupRes.isPB).toBe(false);
-    expect(store.totalSessions()).toBe(50);
+    expect(store.totalSessions()).toBe(100);
   });
 
   it('strictly compares like-for-like scenario and difficulty for personal bests', () => {

@@ -408,30 +408,25 @@ describe('Renderer Segmented Visuals and Resource Lifecycle', () => {
     expect(torsoPart?.mesh).toBe(visual?.torsoMesh);
   });
 
-  it('disposes target geometries and materials on removal without disposing shared resources', () => {
+  it('disposes target materials on removal and preserves shared geometries until renderer disposal', () => {
     renderer.addTarget('dummy_1', new THREE.Vector3(0, HEAD_LEVEL_Y, -10), 0.22);
     const visual = renderer.getTargetVisual('dummy_1')!;
 
-    const headGeoSpy = vi.spyOn(visual.headMesh.geometry, 'dispose');
-    const torsoGeoSpy = vi.spyOn(visual.torsoMesh.geometry, 'dispose');
-    const shoulderGeoSpy = vi.spyOn(visual.shoulderMesh!.geometry, 'dispose');
     const headMatSpy = vi.spyOn(visual.headMesh.material as THREE.Material, 'dispose');
     const torsoMatSpy = vi.spyOn(visual.torsoMesh.material as THREE.Material, 'dispose');
 
     renderer.removeTarget('dummy_1');
 
-    expect(headGeoSpy).toHaveBeenCalled();
-    expect(torsoGeoSpy).toHaveBeenCalled();
-    expect(shoulderGeoSpy).toHaveBeenCalled();
     expect(headMatSpy).toHaveBeenCalled();
     expect(torsoMatSpy).toHaveBeenCalled();
     expect(renderer.getTargetVisual('dummy_1')).toBeUndefined();
 
-    // Verify shared materials remain healthy and can spawn subsequent targets
+    // Verify shared geometries and materials remain healthy and can spawn subsequent targets
     renderer.addTarget('dummy_2', new THREE.Vector3(2, HEAD_LEVEL_Y, -10), 0.22);
     const visual2 = renderer.getTargetVisual('dummy_2');
     expect(visual2).toBeDefined();
     expect(visual2?.headMesh.material).toBeDefined();
+    expect(visual2?.headMesh.geometry).toBe(renderer.sharedHeadGeo);
   });
 
   it('flashes all target meshes upon hit and restores material on timer expiry', () => {

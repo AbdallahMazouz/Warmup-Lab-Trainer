@@ -268,6 +268,319 @@ export function evaluateSkillDimensions(sessions: SessionResult[]): SkillDimensi
   return evaluations;
 }
 
+export const DIFFICULTY_TIERS: DifficultyId[] = ['beginner', 'intermediate', 'advanced', 'pro'];
+
+export interface ConsolidationEvaluation {
+  shouldConsolidate: boolean;
+  targetDifficulty: DifficultyId;
+  reason: string;
+  evidence: string;
+  aggregateMovingRatio?: number;
+}
+
+/**
+ * Evaluates whether player performance at currentDifficulty warrants consolidation at the tier below.
+ * Requires at least 2 sessions at currentDifficulty.
+ * Triggered by:
+ * 1. Pooled movement-shot ratio > 35.0% across qualifying sessions (with >= 4 movement shots).
+ * 2. Systemic deficits across >= 2 skill dimensions.
+ * Pure and non-mutating.
+ */
+export function evaluateConsolidation(
+  sessions: SessionResult[],
+  currentDifficulty: DifficultyId,
+  evaluations: SkillDimensionEvaluation[]
+): ConsolidationEvaluation {
+  const currentIdx = DIFFICULTY_TIERS.indexOf(currentDifficulty);
+  const fallbackTier = currentIdx > 0 ? DIFFICULTY_TIERS[currentIdx - 1] : currentDifficulty;
+
+  const sessionsAtDifficulty = (Array.isArray(sessions) ? sessions : []).filter(
+    (s) => s && s.difficulty === currentDifficulty
+  );
+
+  // A single session must never independently cause consolidation
+  if (sessionsAtDifficulty.length < 2) {
+    return {
+      shouldConsolidate: false,
+      targetDifficulty: currentDifficulty,
+      reason: 'At least 2 sessions at current difficulty are required before consolidation can be suggested.',
+      evidence: `${sessionsAtDifficulty.length} session(s) recorded at ${currentDifficulty}.`,
+    };
+  }
+
+  // Pooled movement-shot aggregation across qualifying sessions
+  let totalMoving = 0;
+  let totalStationary = 0;
+  for (const s of sessionsAtDifficulty) {
+    totalMoving += typeof s.shotsMoving === 'number' && Number.isFinite(s.shotsMoving) ? s.shotsMoving : 0;
+    totalStationary += typeof s.shotsStationary === 'number' && Number.isFinite(s.shotsStationary) ? s.shotsStationary : 0;
+  }
+  const totalMovementShots = totalMoving + totalStationary;
+  const aggregateMovingRatio = totalMovementShots > 0 ? (totalMoving / totalMovementShots) * 100 : 0;
+
+  // Threshold: strictly > 35.0% with at least 4 movement shots
+  const highMovingRatio = totalMovementShots >= 4 && aggregateMovingRatio > 35.0;
+
+  // Systemic deficits across >= 2 dimensions
+  const deficitCount = evaluations.filter((e) => e.isDeficit).length;
+  const hasSystemicDeficit = deficitCount >= 2;
+
+  if (hasSystemicDeficit || highMovingRatio) {
+    if (currentDifficulty === 'beginner') {
+      return {
+        shouldConsolidate: false,
+        targetDifficulty: 'beginner',
+        reason: 'Already at beginner baseline; consolidate fundamentals at current tier.',
+        evidence: 'Beginner tier floor active.',
+        aggregateMovingRatio,
+      };
+    }
+
+    const reason = highMovingRatio
+      ? `High aggregate moving-shot ratio (${aggregateMovingRatio.toFixed(1)}% > 35.0%) across ${sessionsAtDifficulty.length} sessions at ${currentDifficulty}.`
+      : `Systemic struggle detected across ${deficitCount} skill dimensions at ${currentDifficulty}.`;
+
+    const evidence = highMovingRatio
+      ? `Pooled movement shots: ${totalMoving}/${totalMovementShots} moving (${aggregateMovingRatio.toFixed(1)}%).`
+      : `${deficitCount} skill dimensions currently in deficit.`;
+
+    return {
+      shouldConsolidate: true,
+      targetDifficulty: fallbackTier,
+      reason,
+      evidence,
+      aggregateMovingRatio,
+    };
+  }
+
+  return {
+    shouldConsolidate: false,
+    targetDifficulty: currentDifficulty,
+    reason: 'Performance within expected variance; no consolidation required.',
+    evidence: `Moving-shot ratio ${aggregateMovingRatio.toFixed(1)}%, deficits: ${deficitCount}.`,
+    aggregateMovingRatio,
+  };
+}
+
+export interface PromotionEvaluation {
+  shouldPromote: boolean;
+  targetDifficulty: DifficultyId;
+  reason: string;
+  evidence: string;
+  primaryDimensionId?: SkillDimensionId;
+}
+
+/**
+ * Evaluates whether player performance at currentDifficulty qualifies for difficulty promotion.
+ * Every Sprint 3D promotion gate is strictly preserved:
+ * 1. >= 3 eligible sessions at currentDifficulty.
+ * 2. Confidence >= 0.75 on candidate dimension.
+ * 3. Dimension score >= benchmark + 12 (mastery margin).
+ * 4. Shooting throughput >= 15 shots/session where applicable.
+ * 5. Tracking uptime >= 75% where applicable.
+ * 6. Trend not regressing (trendDelta >= -1.0).
+ * 7. No critical deficit (score < 50 with >= 2 samples) in another tested dimension.
+ * 8. Reaction-time gating only for eligible single-target sessions.
+ * Pure and non-mutating.
+ */
+export function evaluatePromotion(
+  sessions: SessionResult[],
+  currentDifficulty: DifficultyId,
+  evaluations: SkillDimensionEvaluation[]
+): PromotionEvaluation {
+  const currentIdx = DIFFICULTY_TIERS.indexOf(currentDifficulty);
+  if (currentIdx === -1 || currentIdx >= DIFFICULTY_TIERS.length - 1) {
+    return {
+      shouldPromote: false,
+      targetDifficulty: currentDifficulty,
+      reason: 'Already at pro tier or invalid difficulty tier.',
+      evidence: 'Maximum difficulty tier reached.',
+    };
+  }
+
+  const nextTier = DIFFICULTY_TIERS[currentIdx + 1];
+
+  const sessionsAtDifficulty = (Array.isArray(sessions) ? sessions : []).filter(
+    (s) => s && s.difficulty === currentDifficulty
+  );
+
+  // Gate 1: At least 3 eligible sessions at current difficulty
+  if (sessionsAtDifficulty.length < 3) {
+    return {
+      shouldPromote: false,
+      targetDifficulty: currentDifficulty,
+      reason: `At least 3 sessions at ${currentDifficulty} required for promotion consideration.`,
+      evidence: `${sessionsAtDifficulty.length} session(s) recorded at ${currentDifficulty}.`,
+    };
+  }
+
+  // Gate 2 & 3: Primary dimension with sampleCount >= 3, confidence >= 0.75, score >= benchmark + 12
+  const candidateDimensions = evaluations.filter((e) => {
+    return e.sampleCount >= 3 && e.confidence >= 0.75 && e.score >= (e.benchmark + 12);
+  });
+
+  if (candidateDimensions.length === 0) {
+    return {
+      shouldPromote: false,
+      targetDifficulty: currentDifficulty,
+      reason: 'No tested skill dimension exceeds baseline benchmark by mastery margin (+12 points).',
+      evidence: 'Mastery margin requirement not met.',
+    };
+  }
+
+  // Sort candidate dimensions by margin: (score - benchmark) descending
+  candidateDimensions.sort((a, b) => (b.score - b.benchmark) - (a.score - a.benchmark));
+  const primaryCandidate = candidateDimensions[0];
+  const config = DIMENSION_CONFIGS[primaryCandidate.dimensionId];
+
+  // Matching sessions at current difficulty for this candidate dimension
+  const matchingSessions = sessionsAtDifficulty.filter((s) => {
+    const sc = getScenarioById(s.scenarioId);
+    return config.filterSession(s, sc);
+  });
+
+  if (matchingSessions.length < 3) {
+    return {
+      shouldPromote: false,
+      targetDifficulty: currentDifficulty,
+      reason: `Insufficient matching sessions (${matchingSessions.length} < 3) on ${primaryCandidate.name}.`,
+      evidence: `${matchingSessions.length} matching sessions recorded.`,
+    };
+  }
+
+  // Gate 4: Shooting throughput >= 15 shots/session where applicable
+  if (primaryCandidate.dimensionId !== 'smooth_tracking') {
+    const totalShots = matchingSessions.reduce((sum, s) => {
+      const shots = typeof s.shotsFired === 'number' && Number.isFinite(s.shotsFired)
+        ? s.shotsFired
+        : (s.hits + s.misses);
+      return sum + shots;
+    }, 0);
+    const avgShots = totalShots / matchingSessions.length;
+    if (avgShots < 15) {
+      return {
+        shouldPromote: false,
+        targetDifficulty: currentDifficulty,
+        reason: `Shooting throughput too low (${avgShots.toFixed(1)} < 15 shots/session) on ${primaryCandidate.name}.`,
+        evidence: `Average ${avgShots.toFixed(1)} shots/session.`,
+      };
+    }
+  }
+
+  // Gate 5: Tracking uptime >= 75% where applicable
+  if (primaryCandidate.dimensionId === 'smooth_tracking') {
+    const totalUptime = matchingSessions.reduce((sum, s) => sum + (s.timeOnTarget ?? 0), 0);
+    const avgUptime = totalUptime / matchingSessions.length;
+    if (avgUptime < 75.0) {
+      return {
+        shouldPromote: false,
+        targetDifficulty: currentDifficulty,
+        reason: `Tracking uptime too low (${avgUptime.toFixed(1)}% < 75.0%) for promotion.`,
+        evidence: `Average tracking uptime ${avgUptime.toFixed(1)}%.`,
+      };
+    }
+  }
+
+  // Gate 6: Trend must not be regressing (trendDelta >= -1)
+  if (matchingSessions.length >= 2) {
+    const val0 = config.extractValue(matchingSessions[0]);
+    const val1 = config.extractValue(matchingSessions[1]);
+    const valDelta = primaryCandidate.dimensionId === 'reaction_time'
+      ? (val1 - val0) // positive when latest is faster (val0 < val1)
+      : (val0 - val1);
+
+    if (valDelta < -1.0) {
+      return {
+        shouldPromote: false,
+        targetDifficulty: currentDifficulty,
+        reason: `Recent performance is regressing on ${primaryCandidate.name} (delta: ${valDelta.toFixed(1)} < -1.0).`,
+        evidence: `Form trend delta ${valDelta.toFixed(1)}.`,
+      };
+    }
+  }
+
+  // Gate 7: No critical deficit (score < 50 with >= 2 samples) in another tested dimension
+  // Untested dimensions (sampleCount < 2) must not block promotion
+  for (const other of evaluations) {
+    if (other.dimensionId !== primaryCandidate.dimensionId) {
+      if (other.sampleCount >= 2 && other.score < 50) {
+        return {
+          shouldPromote: false,
+          targetDifficulty: currentDifficulty,
+          reason: `Critical deficit in ${other.name} (score ${other.score} < 50) blocks difficulty promotion.`,
+          evidence: `${other.name} score is ${other.score} with ${other.sampleCount} samples.`,
+        };
+      }
+    }
+  }
+
+  // Gate 8: Reaction-time gating: reuse existing DIMENSION_CONFIGS.reaction_time and isEligibleForReactionMetric
+  // Reaction time only blocks if eligible single-target reaction sessions have >= 2 samples and score < 60
+  const reactionEval = evaluations.find((e) => e.dimensionId === 'reaction_time');
+  if (reactionEval && reactionEval.dimensionId !== primaryCandidate.dimensionId) {
+    if (reactionEval.sampleCount >= 2 && reactionEval.isDeficit) {
+      return {
+        shouldPromote: false,
+        targetDifficulty: currentDifficulty,
+        reason: `Reaction latency deficit (${reactionEval.evidenceSummary}) blocks difficulty promotion.`,
+        evidence: reactionEval.evidenceSummary,
+      };
+    }
+  }
+
+  return {
+    shouldPromote: true,
+    targetDifficulty: nextTier,
+    reason: `Consistent mastery on ${primaryCandidate.name} (score ${primaryCandidate.score} >= benchmark +12) qualifies for promotion to ${nextTier}.`,
+    evidence: `${primaryCandidate.name} achieved ${primaryCandidate.score}/100 with positive trend across ${matchingSessions.length} sessions.`,
+    primaryDimensionId: primaryCandidate.dimensionId,
+  };
+}
+
+/**
+ * Evaluates adaptive progression across promotion, consolidation, or maintaining current difficulty.
+ * Pure and non-mutating.
+ */
+export function evaluateDifficultyProgression(
+  sessions: SessionResult[],
+  currentDifficulty: DifficultyId,
+  evaluations: SkillDimensionEvaluation[]
+): {
+  targetDifficulty: DifficultyId;
+  action: 'promote' | 'consolidate' | 'maintain';
+  reason: string;
+  evidence: string;
+  primaryDimensionId?: SkillDimensionId;
+} {
+  const consolidation = evaluateConsolidation(sessions, currentDifficulty, evaluations);
+  if (consolidation.shouldConsolidate) {
+    return {
+      targetDifficulty: consolidation.targetDifficulty,
+      action: 'consolidate',
+      reason: consolidation.reason,
+      evidence: consolidation.evidence,
+    };
+  }
+
+  const promotion = evaluatePromotion(sessions, currentDifficulty, evaluations);
+  if (promotion.shouldPromote) {
+    return {
+      targetDifficulty: promotion.targetDifficulty,
+      action: 'promote',
+      reason: promotion.reason,
+      evidence: promotion.evidence,
+      primaryDimensionId: promotion.primaryDimensionId,
+    };
+  }
+
+  return {
+    targetDifficulty: currentDifficulty,
+    action: 'maintain',
+    reason: 'Current difficulty tier matches evaluated baseline performance.',
+    evidence: `${sessions.length} sessions evaluated.`,
+  };
+}
+
 /**
  * Generates an explainable, deterministic training recommendation based on session history.
  * Pure and non-mutating.
@@ -283,7 +596,7 @@ export function generateRecommendation(
     : [];
 
   const evaluations = evaluateSkillDimensions(validSessions);
-  const targetDifficulty: DifficultyId = preferredDifficulty || 'intermediate';
+  const currentTier: DifficultyId = preferredDifficulty || validSessions[0]?.difficulty || 'intermediate';
 
   // 1. Cold Start: If total valid sessions < COLD_START_MIN_SESSIONS
   if (validSessions.length < COLD_START_MIN_SESSIONS) {
@@ -293,7 +606,7 @@ export function generateRecommendation(
       recommendationType: 'routine',
       recommendedRoutineId: routine.id,
       recommendedRoutineName: routine.name,
-      targetDifficulty,
+      targetDifficulty: currentTier,
       primaryDimension: null,
       confidence: 0,
       title: 'Diagnostic Baseline Recommended',
@@ -305,7 +618,11 @@ export function generateRecommendation(
     };
   }
 
-  // 2. Identify candidate deficit dimensions
+  // 2. Adaptive Difficulty Progression (Consolidation or Promotion)
+  const progression = evaluateDifficultyProgression(validSessions, currentTier, evaluations);
+  const targetDifficulty: DifficultyId = progression.targetDifficulty;
+
+  // 3. Identify candidate deficit dimensions
   const deficits = evaluations.filter((e) => e.isDeficit);
 
   if (deficits.length > 0) {
@@ -332,6 +649,17 @@ export function generateRecommendation(
     }
 
     if (selectedScenario) {
+      const isConsolidating = progression.action === 'consolidate';
+      const title = isConsolidating
+        ? `Skill Consolidation: ${selectedScenario.name}`
+        : `Focus Drill: ${selectedScenario.name}`;
+      const rationale = isConsolidating
+        ? `${progression.reason} Focus on ${primaryDeficit.name} to rebuild consistency.`
+        : config.rationale;
+      const evidence = isConsolidating
+        ? `${progression.evidence} ${primaryDeficit.evidenceSummary}`
+        : primaryDeficit.evidenceSummary;
+
       return {
         isColdStart: false,
         recommendationType: 'drill',
@@ -341,16 +669,48 @@ export function generateRecommendation(
         primaryDimension: primaryDeficit.dimensionId,
         dimensionName: primaryDeficit.name,
         confidence: primaryDeficit.confidence,
-        title: `Focus Drill: ${selectedScenario.name}`,
-        rationale: config.rationale,
-        evidence: primaryDeficit.evidenceSummary,
+        title,
+        rationale,
+        evidence,
         benchmarkTarget: config.benchmarkTarget,
         dimensionEvaluations: evaluations,
       };
     }
   }
 
-  // 3. Fallback when no deficit exists (player is performing well across all measured dimensions)
+  // 4. If Promotion triggered without deficits: recommend drill targeting the promoted skill
+  if (progression.action === 'promote' && progression.primaryDimensionId) {
+    const config = DIMENSION_CONFIGS[progression.primaryDimensionId];
+    const mostRecentScenarioId = validSessions[0]?.scenarioId;
+    const candidates = config.eligibleScenarioIds
+      .map((id) => getScenarioById(id))
+      .filter((s): s is ScenarioConfig => s !== undefined);
+
+    let selectedScenario = candidates.find((s) => s.id !== mostRecentScenarioId);
+    if (!selectedScenario && candidates.length > 0) {
+      selectedScenario = candidates[0];
+    }
+
+    if (selectedScenario) {
+      return {
+        isColdStart: false,
+        recommendationType: 'drill',
+        recommendedScenarioId: selectedScenario.id,
+        recommendedScenarioName: selectedScenario.name,
+        targetDifficulty,
+        primaryDimension: progression.primaryDimensionId,
+        dimensionName: config.name,
+        confidence: 1.0,
+        title: `Difficulty Promotion: ${selectedScenario.name}`,
+        rationale: progression.reason,
+        evidence: progression.evidence,
+        benchmarkTarget: config.benchmarkTarget,
+        dimensionEvaluations: evaluations,
+      };
+    }
+  }
+
+  // 5. Fallback when no deficit exists (player is performing well across all measured dimensions)
   // Rank dimensions with samples by lowest score to recommend continuous polish
   const dimensionsWithData = evaluations.filter((e) => e.sampleCount >= DIMENSION_MIN_SAMPLES);
   dimensionsWithData.sort((a, b) => a.score - b.score);
@@ -387,7 +747,7 @@ export function generateRecommendation(
     }
   }
 
-  // 4. General fallback (data exists but insufficient samples per individual dimension)
+  // 6. General fallback (data exists but insufficient samples per individual dimension)
   const fallbackScenario = getScenarioById('flick-static')!;
   return {
     isColdStart: false,

@@ -201,6 +201,9 @@ h4 { font-size: 1.1rem; }
 }
 .nav-logo span { color: var(--text); }
 .nav-link {
+  background: transparent;
+  border: none;
+  font-family: inherit;
   padding: 6px 14px;
   border-radius: var(--r-md);
   color: var(--text-dim);
@@ -209,6 +212,7 @@ h4 { font-size: 1.1rem; }
   transition: color var(--t-fast), background var(--t-fast);
   font-size: 0.9rem;
   letter-spacing: 0.02em;
+  text-align: left;
 }
 .nav-link:hover { color: var(--text); background: var(--panel); }
 .nav-link.active { color: var(--red); }
@@ -726,4 +730,67 @@ input[type="range"]:focus::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--re
   color: var(--teal);
   z-index: 25;
   pointer-events: none;
+}
+
+/* ── Keyboard Focus Styles ── */
+:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.btn:focus-visible, .nav-link:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.card.scenario-card:focus-visible {
+  outline: 2px solid var(--teal);
+  border-color: var(--teal);
+}
+
+/* ── Table Scroll Container & Mobile Overflow Indicator ── */
+.table-scroll-wrapper {
+  position: relative;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* ── Responsive Layouts ── */
+@media (max-width: 1024px) {
+  .grid-4 { grid-template-columns: repeat(2, 1fr); }
+  .grid-3 { grid-template-columns: repeat(2, 1fr); }
+  .page-inner { padding: 24px 16px; }
+}
+
+@media (max-width: 720px) {
+  .nav {
+    padding: 0 12px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .nav-logo { font-size: 1.25rem; margin-right: 8px; }
+  .nav-link { padding: 6px 10px; font-size: 0.82rem; }
+  .grid-4, .grid-3, .grid-2 { grid-template-columns: 1fr; }
+  .scenario-grid { grid-template-columns: 1fr; }
+  .hero-title { font-size: 2rem; }
+
+  /* Mobile scroll-shadow indicator for horizontally overflowing tables */
+  .table-scroll-wrapper {
+    background:
+      linear-gradient(to right, var(--panel) 25%, rgba(26,26,40,0)),
+      linear-gradient(to right, rgba(26,26,40,0), var(--panel) 75%) 0 100%,
+      radial-gradient(farthest-side at 0 50%, rgba(0,212,170,0.35), rgba(0,0,0,0)),
+      radial-gradient(farthest-side at 100% 50%, rgba(0,212,170,0.35), rgba(0,0,0,0)) 0 100%;
+    background-repeat: no-repeat;
+    background-color: transparent;
+    background-size: 32px 100%, 32px 100%, 12px 100%, 12px 100%;
+    background-position: 0 0, 100% 0, 0 0, 100% 0;
+    background-attachment: local, local, scroll, scroll;
+  }
+}
+
+@media (max-width: 480px) {
+  .hero-actions { flex-direction: column; width: 100%; }
+  .hero-actions .btn { width: 100%; }
+  .section-header h2 { font-size: 1.5rem; }
+  .nav-spacer { display: none; }
+  #btn-quick-play { font-size: 0.75rem; padding: 4px 10px; }
 }

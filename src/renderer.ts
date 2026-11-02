@@ -45,6 +45,11 @@ export class Renderer {
   private arenaMeshes: THREE.Object3D[] = [];
   private arenaDisposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
+  // Reusable normalized unit geometries for target rendering (eliminates dynamic buffer allocations)
+  public readonly sharedHeadGeo = new THREE.SphereGeometry(1, 20, 16);
+  public readonly sharedTorsoGeo = new THREE.CylinderGeometry(1.15, 0.85, 1, 20);
+  public readonly sharedShoulderGeo = new THREE.BoxGeometry(1, 1, 1);
+
   constructor(canvas: HTMLCanvasElement, fov: number, customRenderer?: THREE.WebGLRenderer) {
     // Scene
     this.scene = new THREE.Scene();
@@ -197,32 +202,27 @@ export class Renderer {
     const group = new THREE.Group();
     group.position.copy(position);
 
-    // Head mesh: Sphere centered at head level
-    const headGeo = new THREE.SphereGeometry(headRadius, 20, 16);
-    const headMesh = new THREE.Mesh(headGeo, this.matIdle.clone());
+    // Head mesh: Reusable unit sphere scaled to head radius
+    const headMesh = new THREE.Mesh(this.sharedHeadGeo, this.matIdle.clone());
+    headMesh.scale.set(headRadius, headRadius, headRadius);
     headMesh.position.set(0, headOffsetY, 0);
     headMesh.castShadow = true;
     group.add(headMesh);
 
-    // Torso mesh: Tapered cylinder representing athletic dummy upper body
-    const torsoGeo = new THREE.CylinderGeometry(
-      torsoRadius * 1.15,
-      torsoRadius * 0.85,
-      torsoHeight,
-      20
-    );
-    const torsoMesh = new THREE.Mesh(torsoGeo, this.matIdle.clone());
+    // Torso mesh: Reusable unit tapered cylinder scaled to torso dimensions
+    const torsoMesh = new THREE.Mesh(this.sharedTorsoGeo, this.matIdle.clone());
+    torsoMesh.scale.set(torsoRadius, torsoHeight, torsoRadius);
     torsoMesh.position.set(0, torsoOffsetY, 0);
     torsoMesh.castShadow = true;
     group.add(torsoMesh);
 
-    // Shoulder accent: Horizontal geometry connecting torso and head
-    const shoulderGeo = new THREE.BoxGeometry(
+    // Shoulder accent: Reusable unit box scaled to shoulder dimensions
+    const shoulderMesh = new THREE.Mesh(this.sharedShoulderGeo, this.matIdle.clone());
+    shoulderMesh.scale.set(
       torsoRadius * 2.2,
       0.06 * scale,
       torsoRadius * 1.2
     );
-    const shoulderMesh = new THREE.Mesh(shoulderGeo, this.matIdle.clone());
     shoulderMesh.position.set(0, torsoOffsetY + torsoHeight / 2 - 0.03 * scale, 0);
     shoulderMesh.castShadow = true;
     group.add(shoulderMesh);
@@ -267,7 +267,7 @@ export class Renderer {
     if (visual) {
       this.scene.remove(visual.group);
       for (const mesh of visual.allMeshes) {
-        mesh.geometry.dispose();
+        // Dispose per-target material clone; shared unit geometries are preserved
         (mesh.material as THREE.Material).dispose();
       }
       this.targetVisuals.delete(id);
@@ -335,6 +335,9 @@ export class Renderer {
 
   dispose(): void {
     this.clearTargets();
+    this.sharedHeadGeo.dispose();
+    this.sharedTorsoGeo.dispose();
+    this.sharedShoulderGeo.dispose();
     this.matIdle.dispose();
     this.matHit.dispose();
     for (const d of this.arenaDisposables) {

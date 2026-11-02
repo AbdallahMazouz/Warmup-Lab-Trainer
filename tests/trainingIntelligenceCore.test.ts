@@ -7,10 +7,18 @@ import {
 import {
   evaluateSkillDimensions,
   generateRecommendation,
+  evaluatePromotion,
+  evaluateConsolidation,
+  evaluateDifficultyProgression,
   COLD_START_MIN_SESSIONS,
   DIMENSION_MIN_SAMPLES,
 } from '../src/recommendations';
-import { getScenarioById, SCENARIOS } from '../src/scenarios';
+import {
+  getScenarioById,
+  SCENARIOS,
+  clampDifficultyToSupported,
+  applyDifficultyPreset,
+} from '../src/scenarios';
 import type { SessionResult } from '../src/types';
 
 function createDummySession(overrides: Partial<SessionResult> = {}): SessionResult {
@@ -468,5 +476,444 @@ describe('Stage 2 — Recommendation Engine', () => {
 
     expect(() => evaluateSkillDimensions(corruptedSessions)).not.toThrow();
     expect(() => generateRecommendation(corruptedSessions)).not.toThrow();
+  });
+});
+
+describe('Stage 3 — Adaptive Promotion Engine', () => {
+  it('promotes to next difficulty when >= 3 sessions at current difficulty have confidence >= 0.75, score >= benchmark + 12, throughput >= 15, and non-regressing trend', () => {
+    // Benchmark for flick_accuracy is 70. 70 + 12 = 82.
+    // 3 intermediate sessions with 85% accuracy, 25 shots each, non-regressing
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 88, shotsFired: 25, score: 1200 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 86, shotsFired: 25, score: 1150 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 85, shotsFired: 25, score: 1100 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+
+    expect(promotion.shouldPromote).toBe(true);
+    expect(promotion.targetDifficulty).toBe('advanced');
+    expect(promotion.primaryDimensionId).toBe('flick_accuracy');
+
+    // Integrated check via generateRecommendation
+    const rec = generateRecommendation(sessions, 'intermediate');
+    expect(rec.targetDifficulty).toBe('advanced');
+    expect(rec.title).toContain('Difficulty Promotion');
+  });
+
+  it('blocks promotion when only 2 sessions exist (confidence guard)', () => {
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 95, shotsFired: 30, score: 1400 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 95, shotsFired: 30, score: 1400 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(false);
+    expect(promotion.targetDifficulty).toBe('intermediate');
+  });
+
+  it('blocks promotion when score is above benchmark but below mastery margin (benchmark + 12)', () => {
+    // Benchmark 70.0. Score 78.0 is >= 70 but < 82
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 78, shotsFired: 25, score: 1050 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 78, shotsFired: 25, score: 1050 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 78, shotsFired: 25, score: 1050 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(false);
+  });
+
+  it('blocks promotion when shooting throughput is below 15 shots/session', () => {
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 95, hits: 8, misses: 2, shotsFired: 10 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 95, hits: 8, misses: 2, shotsFired: 10 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 95, hits: 8, misses: 2, shotsFired: 10 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(false);
+    expect(promotion.reason).toContain('Shooting throughput too low');
+  });
+
+  it('promotes tracking-only sessions without reaction data (reaction bypass)', () => {
+    // Tracking benchmark: 65. 65 + 12 = 77.
+    // 3 sessions with timeOnTarget = 85% >= 75%
+    const sessions = [
+      createDummySession({
+        scenarioId: 'track-smooth',
+        category: 'tracking',
+        difficulty: 'intermediate',
+        timeOnTarget: 86.0,
+        hits: 0,
+        misses: 0,
+        avgReactionMs: 0,
+      }),
+      createDummySession({
+        scenarioId: 'track-strafe',
+        category: 'tracking',
+        difficulty: 'intermediate',
+        timeOnTarget: 85.0,
+        hits: 0,
+        misses: 0,
+        avgReactionMs: 0,
+      }),
+      createDummySession({
+        scenarioId: 'track-reactive',
+        category: 'tracking',
+        difficulty: 'intermediate',
+        timeOnTarget: 85.0,
+        hits: 0,
+        misses: 0,
+        avgReactionMs: 0,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(true);
+    expect(promotion.targetDifficulty).toBe('advanced');
+    expect(promotion.primaryDimensionId).toBe('smooth_tracking');
+  });
+
+  it('blocks promotion when single-target reaction latency has an established deficit', () => {
+    // 3 flick sessions with high accuracy (mastery margin met) but slow reaction time (248ms)
+    // Plus 2 reaction sessions with avgReactionMs = 248ms (score 54 < benchmark 60, but >= 50 so not critical deficit)
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25, avgReactionMs: 248 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25, avgReactionMs: 248 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25, avgReactionMs: 248 }),
+      createDummySession({
+        scenarioId: 'reaction-visual',
+        category: 'reaction',
+        difficulty: 'intermediate',
+        avgReactionMs: 248,
+        hits: 10,
+      }),
+      createDummySession({
+        scenarioId: 'reaction-visual',
+        category: 'reaction',
+        difficulty: 'intermediate',
+        avgReactionMs: 248,
+        hits: 10,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(false);
+    expect(promotion.reason).toContain('Reaction latency deficit');
+  });
+
+  it('blocks promotion when another tested dimension has a critical deficit (score < 50 with >= 2 samples)', () => {
+    // 3 flick sessions at 90%
+    // 2 tracking sessions at 30% timeOnTarget (critical deficit)
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'intermediate', timeOnTarget: 30 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'intermediate', timeOnTarget: 30 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(false);
+    expect(promotion.reason).toContain('Critical deficit');
+  });
+
+  it('untested dimensions with < 2 samples do not block promotion', () => {
+    // 3 flick sessions with 90% accuracy
+    // 1 single tracking session with poor 20% timeOnTarget (untested dimension, sampleCount < 2)
+    const sessions = [
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ difficulty: 'intermediate', accuracy: 90, shotsFired: 25 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'intermediate', timeOnTarget: 20 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'intermediate', evals);
+    expect(promotion.shouldPromote).toBe(true);
+    expect(promotion.targetDifficulty).toBe('advanced');
+  });
+
+  it('caps promotion at pro tier without overflow', () => {
+    const sessions = [
+      createDummySession({ difficulty: 'pro', accuracy: 95, shotsFired: 25 }),
+      createDummySession({ difficulty: 'pro', accuracy: 95, shotsFired: 25 }),
+      createDummySession({ difficulty: 'pro', accuracy: 95, shotsFired: 25 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const promotion = evaluatePromotion(sessions, 'pro', evals);
+    expect(promotion.shouldPromote).toBe(false);
+    expect(promotion.targetDifficulty).toBe('pro');
+  });
+});
+
+describe('Stage 4 — Adaptive Consolidation & Movement Pooling', () => {
+  it('single poor session at advanced difficulty never independently causes consolidation', () => {
+    const sessions = [
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 10,
+        shotsStationary: 0,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    expect(consolidation.shouldConsolidate).toBe(false);
+    expect(consolidation.targetDifficulty).toBe('advanced');
+  });
+
+  it('consolidates to intermediate when >= 2 advanced sessions show systemic deficits across 2 dimensions', () => {
+    const sessions = [
+      createDummySession({ scenarioId: 'flick-static', category: 'flick', difficulty: 'advanced', accuracy: 40 }),
+      createDummySession({ scenarioId: 'flick-static', category: 'flick', difficulty: 'advanced', accuracy: 40 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'advanced', timeOnTarget: 30 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'advanced', timeOnTarget: 30 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    expect(consolidation.shouldConsolidate).toBe(true);
+    expect(consolidation.targetDifficulty).toBe('intermediate');
+    expect(consolidation.reason).toContain('Systemic struggle');
+  });
+
+  it('consolidates when aggregate moving-shot ratio exceeds 35% across qualifying sessions with >= 4 movement shots', () => {
+    // Session 1: 5 moving, 5 stationary
+    // Session 2: 4 moving, 6 stationary
+    // Total: 9 moving / 20 shots = 45% (>35%)
+    const sessions = [
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 5,
+        shotsStationary: 5,
+      }),
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 4,
+        shotsStationary: 6,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    expect(consolidation.shouldConsolidate).toBe(true);
+    expect(consolidation.targetDifficulty).toBe('intermediate');
+    expect(consolidation.aggregateMovingRatio).toBe(45.0);
+  });
+
+  it('boundary condition: aggregate moving-shot ratio of exactly 35.0% does NOT trigger consolidation', () => {
+    // Session 1: 3 moving, 7 stationary
+    // Session 2: 4 moving, 6 stationary
+    // Total: 7 moving / 20 shots = 35.0% exactly
+    const sessions = [
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 3,
+        shotsStationary: 7,
+      }),
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 4,
+        shotsStationary: 6,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    // Strict > 35.0% threshold: exactly 35.0% must NOT consolidate
+    expect(consolidation.aggregateMovingRatio).toBe(35.0);
+    expect(consolidation.shouldConsolidate).toBe(false);
+    expect(consolidation.targetDifficulty).toBe('advanced');
+  });
+
+  it('requires at least 4 movement shots before movement ratio triggers consolidation', () => {
+    // 2 sessions with 1 moving shot each, 0 stationary (total 2 movement shots < 4)
+    const sessions = [
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 1,
+        shotsStationary: 0,
+      }),
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 1,
+        shotsStationary: 0,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    expect(consolidation.shouldConsolidate).toBe(false);
+  });
+
+  it('preserves current difficulty when exactly 1 isolated dimension is in deficit', () => {
+    // 2 sessions with steady-aim deficit, but moving ratio is 20% (<= 35%), no other deficits
+    const sessions = [
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 2,
+        shotsStationary: 8, // 20% moving
+      }),
+      createDummySession({
+        scenarioId: 'tactical-counter-strafe',
+        category: 'tactical',
+        difficulty: 'advanced',
+        shotsMoving: 2,
+        shotsStationary: 8,
+      }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'advanced', evals);
+    expect(consolidation.shouldConsolidate).toBe(false);
+    expect(consolidation.targetDifficulty).toBe('advanced');
+  });
+
+  it('beginner floor: beginner sessions with deficits remain at beginner', () => {
+    const sessions = [
+      createDummySession({ scenarioId: 'flick-static', category: 'flick', difficulty: 'beginner', accuracy: 30 }),
+      createDummySession({ scenarioId: 'flick-static', category: 'flick', difficulty: 'beginner', accuracy: 30 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'beginner', timeOnTarget: 20 }),
+      createDummySession({ scenarioId: 'track-smooth', category: 'tracking', difficulty: 'beginner', timeOnTarget: 20 }),
+    ];
+
+    const evals = evaluateSkillDimensions(sessions);
+    const consolidation = evaluateConsolidation(sessions, 'beginner', evals);
+    expect(consolidation.shouldConsolidate).toBe(false);
+    expect(consolidation.targetDifficulty).toBe('beginner');
+  });
+});
+
+describe('Stage 5 — Difficulty Clamping & Immutability', () => {
+  it('clampDifficultyToSupported preserves exact supported difficulty', () => {
+    expect(clampDifficultyToSupported('advanced', ['beginner', 'advanced'])).toBe('advanced');
+    expect(clampDifficultyToSupported('beginner', ['beginner', 'pro'])).toBe('beginner');
+  });
+
+  it('clamps to nearest supported tier when target tier is omitted', () => {
+    // Target is 'pro' (index 3); supported are beginner (0) and intermediate (1). Nearest is intermediate (dist 2 vs 3).
+    expect(clampDifficultyToSupported('pro', ['beginner', 'intermediate'])).toBe('intermediate');
+  });
+
+  it('resolves equidistant ties in favor of the lower difficulty tier', () => {
+    // Target is 'intermediate' (index 1); supported are beginner (0) and advanced (2). Distance to both is 1.
+    expect(clampDifficultyToSupported('intermediate', ['beginner', 'advanced'])).toBe('beginner');
+    // Inverse array order check
+    expect(clampDifficultyToSupported('intermediate', ['advanced', 'beginner'])).toBe('beginner');
+  });
+
+  it('fallback for empty or undefined supportedDifficulties preserves target difficulty', () => {
+    expect(clampDifficultyToSupported('pro', undefined)).toBe('pro');
+    expect(clampDifficultyToSupported('advanced', [])).toBe('advanced');
+  });
+
+  it('applyDifficultyPreset does not mutate pristine scenario config', () => {
+    const sc = getScenarioById('track-smooth')!;
+    const initialSpeed = sc.targetSpeedMultiplier;
+    const initialDifficulty = sc.difficulty;
+
+    const preset = applyDifficultyPreset(sc, 'pro');
+
+    // Pristine must be unchanged
+    expect(sc.targetSpeedMultiplier).toBe(initialSpeed);
+    expect(sc.difficulty).toBe(initialDifficulty);
+
+    // Preset carries applied difficulty and scaled values
+    expect(preset.difficulty).toBe('pro');
+    expect(preset.targetSpeedMultiplier).toBeGreaterThan(initialSpeed);
+  });
+});
+
+describe('Stage 6 — Metric-Specific Sample Guards in Scenario Trends', () => {
+  let store: Store;
+
+  beforeEach(() => {
+    localStorage.clear();
+    store = new Store();
+  });
+
+  it('marks accuracyDelta and headshotDelta as null when shotsFired < 5', () => {
+    // 2 sessions with only 2 shots fired each
+    store.addSession(createDummySession({
+      scenarioId: 'flick-static',
+      difficulty: 'intermediate',
+      hits: 2,
+      misses: 0,
+      shotsFired: 2,
+      accuracy: 100,
+      score: 500,
+    }));
+    store.addSession(createDummySession({
+      scenarioId: 'flick-static',
+      difficulty: 'intermediate',
+      hits: 1,
+      misses: 1,
+      shotsFired: 2,
+      accuracy: 50,
+      score: 400,
+    }));
+
+    const trend = store.getScenarioTrend('flick-static', 'intermediate');
+    expect(trend.hasEnoughData).toBe(true);
+    expect(trend.scoreDelta).toBe(-100);
+    // Accuracy and headshot deltas must be null due to insufficient shots
+    expect(trend.accuracyDelta).toBeNull();
+    expect(trend.headshotDelta).toBeNull();
+  });
+
+  it('tracking sessions with 0 shots calculate scoreDelta while reporting accuracyDelta as null', () => {
+    store.addSession(createDummySession({
+      scenarioId: 'track-smooth',
+      category: 'tracking',
+      difficulty: 'intermediate',
+      hits: 0,
+      misses: 0,
+      shotsFired: 0,
+      timeOnTarget: 70,
+      score: 800,
+    }));
+    store.addSession(createDummySession({
+      scenarioId: 'track-smooth',
+      category: 'tracking',
+      difficulty: 'intermediate',
+      hits: 0,
+      misses: 0,
+      shotsFired: 0,
+      timeOnTarget: 85,
+      score: 1100,
+    }));
+
+    const trend = store.getScenarioTrend('track-smooth', 'intermediate');
+    expect(trend.hasEnoughData).toBe(true);
+    expect(trend.scoreDelta).toBe(300);
+    expect(trend.accuracyDelta).toBeNull();
+    expect(trend.headshotDelta).toBeNull();
+    expect(trend.meaningfulReactionTime).toBe(false);
   });
 });

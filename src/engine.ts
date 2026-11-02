@@ -58,6 +58,7 @@ export class Engine {
   activeConfig: ScenarioConfig | null = null;
   isRunning = false;
   isPaused = false;
+  renderWhenInactive = false;
 
   private startTime = 0;
   private durationSec = 60;
@@ -314,10 +315,24 @@ export class Engine {
     }
   }
 
+  renderFrame(): void {
+    this.renderer.render();
+    this.vandal.render(this.renderer.renderer);
+  }
+
   update(): void {
     const now = performance.now();
     const delta = (now - this.lastTime) / 1000;
     this.lastTime = now;
+
+    if (!this.isRunning || !this.activeConfig) {
+      if (this.renderWhenInactive) {
+        this.renderer.render();
+        this.vandal.update(delta * 1000, now);
+        this.vandal.render(this.renderer.renderer);
+      }
+      return;
+    }
 
     // Calculate FPS
     this.fpsFrames++;
@@ -327,8 +342,8 @@ export class Engine {
       this.fpsLastCalc = now;
     }
 
-    if (!this.isRunning || this.isPaused || !this.activeConfig) {
-      // Just render scene + viewmodel
+    if (this.isPaused) {
+      // Paused drill: render background scene under lock overlay but skip physics/target tick
       this.renderer.render();
       this.vandal.update(delta * 1000, now);
       this.vandal.render(this.renderer.renderer);

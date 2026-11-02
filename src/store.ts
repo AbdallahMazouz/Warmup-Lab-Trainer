@@ -11,10 +11,14 @@ import type {
   ScenarioTrendResult,
   BestScenarioMetric,
   AggregateStats,
+  HistoryExportEnvelope,
+  ImportHistoryResult,
+  FilterSessionsOptions,
+  FilteredSessionsResult,
 } from './types';
 import { getScenarioById } from './scenarios';
 
-const MAX_SESSIONS = 50;
+const MAX_SESSIONS = 100;
 const MAX_ROUTINES = 20;
 
 export class Store {
@@ -61,6 +65,246 @@ export class Store {
 
   getRecentSessions(limit = 10): SessionResult[] {
     return this.sessions.slice(0, limit);
+  }
+
+  // ── History Management & Diagnostics ───────────────────────────────
+  exportSessionsJSON(): string {
+    const envelope: HistoryExportEnvelope = {
+      version: 'vwt-history-v1',
+      exportedAt: Date.now(),
+      totalSessions: this.sessions.length,
+      sessions: [...this.sessions],
+    };
+    return JSON.stringify(envelope, null, 2);
+  }
+
+  importSessionsJSON(jsonStr: string): ImportHistoryResult {
+    const totalBefore = this.sessions.length;
+
+    if (typeof jsonStr !== 'string' || !jsonStr.trim()) {
+      return {
+        success: false,
+        importedCount: 0,
+        duplicateCount: 0,
+        invalidCount: 0,
+        totalBefore,
+        totalAfter: totalBefore,
+        error: 'Empty or invalid JSON string provided.',
+      };
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (err: any) {
+      return {
+        success: false,
+        importedCount: 0,
+        duplicateCount: 0,
+        invalidCount: 0,
+        totalBefore,
+        totalAfter: totalBefore,
+        error: `JSON parse error: ${err?.message || 'Invalid JSON syntax'}`,
+      };
+    }
+
+    let rawRecords: unknown[];
+    if (Array.isArray(parsed)) {
+      rawRecords = parsed;
+    } else if (parsed && typeof parsed === 'object') {
+      const envelope = parsed as any;
+      if (Array.isArray(envelope.sessions)) {
+        rawRecords = envelope.sessions;
+      } else {
+        return {
+          success: false,
+          importedCount: 0,
+          duplicateCount: 0,
+          invalidCount: 0,
+          totalBefore,
+          totalAfter: totalBefore,
+          error: 'Unsupported JSON structure: object missing "sessions" array.',
+        };
+      }
+    } else {
+      return {
+        success: false,
+        importedCount: 0,
+        duplicateCount: 0,
+        invalidCount: 0,
+        totalBefore,
+        totalAfter: totalBefore,
+        error: 'Invalid JSON payload type. Expected an array or export envelope object.',
+      };
+    }
+
+    let importedCount = 0;
+    let duplicateCount = 0;
+    let invalidCount = 0;
+
+    const workingSessions = [...this.sessions];
+    const newlyAddedSessions: SessionResult[] = [];
+
+    for (const item of rawRecords) {
+      const sanitized = this.sanitizeSession(item);
+      if (!sanitized) {
+        invalidCount++;
+        continue;
+      }
+
+      const rawId = item && typeof (item as any).id === 'string' && (item as any).id.trim()
+        ? (item as any).id.trim()
+        : null;
+
+      const isDuplicate = workingSessions.some((existing) => {
+        if (rawId) {
+          return existing.id === rawId;
+        }
+        return existing.timestamp === sanitized.timestamp && existing.scenarioId === sanitized.scenarioId;
+      });
+
+      if (isDuplicate) {
+        duplicateCount++;
+        continue;
+      }
+
+      workingSessions.push(sanitized);
+      newlyAddedSessions.push(sanitized);
+      importedCount++;
+    }
+
+    if (importedCount === 0 && duplicateCount === 0) {
+      return {
+        success: false,
+        importedCount: 0,
+        duplicateCount,
+        invalidCount,
+        totalBefore,
+        totalAfter: totalBefore,
+        error: 'No valid session records found in import payload.',
+      };
+    }
+
+    if (importedCount === 0) {
+      return {
+        success: true,
+        importedCount: 0,
+        retainedCount: 0,
+        excludedByCapCount: 0,
+        duplicateCount,
+        invalidCount,
+        totalBefore,
+        totalAfter: totalBefore,
+      };
+    }
+
+    workingSessions.sort((a, b) => b.timestamp - a.timestamp);
+    const clampedSessions = workingSessions.slice(0, MAX_SESSIONS);
+
+    // Differentiate newly added records that fit within MAX_SESSIONS from those excluded by cap
+    const clampedSet = new Set(clampedSessions.map(s => s.id));
+    const retainedCount = newlyAddedSessions.filter(s => clampedSet.has(s.id)).length;
+    const excludedByCapCount = newlyAddedSessions.length - retainedCount;
+
+    try {
+      localStorage.setItem(LS_SESSIONS, JSON.stringify(clampedSessions));
+    } catch (err: any) {
+      return {
+        success: false,
+        importedCount: 0,
+        retainedCount: 0,
+        excludedByCapCount: 0,
+        duplicateCount,
+        invalidCount,
+        totalBefore,
+        totalAfter: totalBefore,
+        error: `Storage failure: ${err?.message || 'Could not write to localStorage'}`,
+      };
+    }
+
+    this.sessions = clampedSessions;
+
+    for (const s of newlyAddedSessions) {
+      this.updatePB(s);
+    }
+
+    return {
+      success: true,
+      importedCount,
+      retainedCount,
+      excludedByCapCount,
+      duplicateCount,
+      invalidCount,
+      totalBefore,
+      totalAfter: this.sessions.length,
+    };
+  }
+
+  clearSessions(): void {
+    this.sessions = [];
+    try {
+      localStorage.removeItem(LS_SESSIONS);
+    } catch {}
+  }
+
+  getFilteredSessions(options: FilterSessionsOptions = {}): FilteredSessionsResult {
+    const {
+      category = 'all',
+      difficulty = 'all',
+      scenarioId = 'all',
+      sortBy = 'date_desc',
+      page = 1,
+      pageSize = 10,
+    } = options;
+
+    let filtered = [...this.sessions];
+
+    if (category && category !== 'all') {
+      filtered = filtered.filter((s) => s.category === category);
+    }
+
+    if (difficulty && difficulty !== 'all') {
+      filtered = filtered.filter((s) => s.difficulty === difficulty);
+    }
+
+    if (scenarioId && scenarioId !== 'all') {
+      filtered = filtered.filter((s) => s.scenarioId === scenarioId);
+    }
+
+    switch (sortBy) {
+      case 'date_asc':
+        filtered.sort((a, b) => a.timestamp - b.timestamp);
+        break;
+      case 'score_desc':
+        filtered.sort((a, b) => b.score - a.score);
+        break;
+      case 'score_asc':
+        filtered.sort((a, b) => a.score - b.score);
+        break;
+      case 'accuracy_desc':
+        filtered.sort((a, b) => b.accuracy - a.accuracy);
+        break;
+      case 'date_desc':
+      default:
+        filtered.sort((a, b) => b.timestamp - a.timestamp);
+        break;
+    }
+
+    const totalRecords = filtered.length;
+    const safePageSize = Math.max(1, pageSize);
+    const totalPages = Math.max(1, Math.ceil(totalRecords / safePageSize));
+    const safePage = Math.max(1, Math.min(page, totalPages));
+
+    const startIdx = (safePage - 1) * safePageSize;
+    const pagedSessions = filtered.slice(startIdx, startIdx + safePageSize);
+
+    return {
+      sessions: pagedSessions,
+      totalRecords,
+      totalPages,
+      currentPage: safePage,
+      pageSize: safePageSize,
+    };
   }
 
   // ── Routine Summaries ──────────────────────────────────────────────
@@ -255,10 +499,24 @@ export class Store {
     const previous = matches[1];
 
     const scoreDelta = latest.score - previous.score;
-    const accuracyDelta = Number((latest.accuracy - previous.accuracy).toFixed(1));
+
+    const latestShots = typeof latest.shotsFired === 'number' && Number.isFinite(latest.shotsFired)
+      ? latest.shotsFired
+      : (latest.hits + latest.misses);
+    const prevShots = typeof previous.shotsFired === 'number' && Number.isFinite(previous.shotsFired)
+      ? previous.shotsFired
+      : (previous.hits + previous.misses);
+    const hasSufficientShooting = latestShots >= 5 && prevShots >= 5;
+
+    const accuracyDelta = hasSufficientShooting
+      ? Number((latest.accuracy - previous.accuracy).toFixed(1))
+      : null;
+
     const latestHs = typeof latest.headshotPct === 'number' ? latest.headshotPct : (latest.hits > 0 ? (latest.headshots / latest.hits) * 100 : 0);
     const prevHs = typeof previous.headshotPct === 'number' ? previous.headshotPct : (previous.hits > 0 ? (previous.headshots / previous.hits) * 100 : 0);
-    const headshotDelta = Number((latestHs - prevHs).toFixed(1));
+    const headshotDelta = hasSufficientShooting
+      ? Number((latestHs - prevHs).toFixed(1))
+      : null;
 
     let reactionDelta: number | null = null;
     if (meaningfulReactionTime && latest.avgReactionMs > 0 && previous.avgReactionMs > 0) {

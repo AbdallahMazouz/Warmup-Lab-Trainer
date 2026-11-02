@@ -23,6 +23,10 @@ export class AudioManager {
   private ready = false;
   private activePanners = new Set<PannerNode>();
 
+  // Cached noise buffer pool per sound profile (4 distinct buffers per profile for natural shot variation)
+  private gunshotNoiseCache = new Map<SoundProfileId, AudioBuffer[]>();
+  private gunshotBufferIndex = 0;
+
   init(): void {
     try {
       const AudioCtx = typeof window !== 'undefined'
@@ -183,6 +187,29 @@ export class AudioManager {
 
   // ── Procedural Sound Synthesis ──────────────────────────────────────
 
+  private getGunshotNoiseBuffer(profileId: SoundProfileId): AudioBuffer | null {
+    if (!this.ctx) return null;
+    let pool = this.gunshotNoiseCache.get(profileId);
+    if (!pool || pool.length === 0) {
+      pool = [];
+      const profile = getSoundProfile(profileId);
+      const g = profile.gunshot;
+      const bufLen = Math.max(128, Math.floor(this.ctx.sampleRate * g.noiseDuration));
+      const poolSize = 4;
+      for (let p = 0; p < poolSize; p++) {
+        const buf = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
+        const data = buf.getChannelData(0);
+        for (let i = 0; i < bufLen; i++) {
+          data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufLen * g.noiseDecay));
+        }
+        pool.push(buf);
+      }
+      this.gunshotNoiseCache.set(profileId, pool);
+    }
+    this.gunshotBufferIndex = (this.gunshotBufferIndex + 1) % pool.length;
+    return pool[this.gunshotBufferIndex];
+  }
+
   /**
    * Procedural Vandal Gunshot:
    * Layer 1: Filtered burst of noise (body rumble + acoustic air displacement)
@@ -191,22 +218,20 @@ export class AudioManager {
    */
   playGunshot(profileId?: SoundProfileId): void {
     if (!this.ready || !this.ctx || this.getEffectiveVolume() <= 0.0001) return;
-    const profile = getSoundProfile(profileId || this.activeProfileId);
+    const effectiveProfileId = profileId || this.activeProfileId;
+    const profile = getSoundProfile(effectiveProfileId);
     const now = this.ctx.currentTime;
     const targetDest = this.getDestination();
     if (!targetDest) return;
 
     try {
-      // 1. Noise body
+      // 1. Noise body from cached multi-buffer pool (preserves acoustic variance with zero per-shot allocations)
       const g = profile.gunshot;
-      const bufLen = Math.max(128, Math.floor(this.ctx.sampleRate * g.noiseDuration));
-      const buf = this.ctx.createBuffer(1, bufLen, this.ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < bufLen; i++) {
-        data[i] = (Math.random() * 2 - 1) * Math.exp(-i / (bufLen * g.noiseDecay));
-      }
+      const cachedBuf = this.getGunshotNoiseBuffer(effectiveProfileId);
+      if (!cachedBuf) return;
+
       const noiseSrc = this.ctx.createBufferSource();
-      noiseSrc.buffer = buf;
+      noiseSrc.buffer = cachedBuf;
 
       const filter = this.ctx.createBiquadFilter();
       filter.type = 'lowpass';
@@ -556,6 +581,7 @@ export class AudioManager {
   }
 
   dispose(): void {
+    this.gunshotNoiseCache.clear();
     for (const panner of this.activePanners) {
       try { panner.disconnect(); } catch {}
     }

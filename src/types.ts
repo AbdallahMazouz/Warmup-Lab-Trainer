@@ -142,8 +142,8 @@ export interface ScenarioTrendResult {
   latest?: SessionResult;
   previous?: SessionResult;
   scoreDelta?: number;
-  accuracyDelta?: number;
-  headshotDelta?: number;
+  accuracyDelta?: number | null;
+  headshotDelta?: number | null;
   reactionDelta?: number | null;
   meaningfulReactionTime: boolean;
   recentScores: number[];
@@ -170,6 +170,42 @@ export interface AggregateStats {
   totalHeadshots: number;
   shootingDrillsCount?: number;
   trackingDrillsCount?: number;
+}
+
+export interface HistoryExportEnvelope {
+  version: 'vwt-history-v1';
+  exportedAt: number;
+  totalSessions: number;
+  sessions: SessionResult[];
+}
+
+export interface ImportHistoryResult {
+  success: boolean;
+  importedCount: number;
+  duplicateCount: number;
+  invalidCount: number;
+  totalBefore: number;
+  totalAfter: number;
+  retainedCount?: number;
+  excludedByCapCount?: number;
+  error?: string;
+}
+
+export interface FilterSessionsOptions {
+  category?: string;
+  difficulty?: DifficultyId | 'all';
+  scenarioId?: string;
+  sortBy?: 'date_desc' | 'date_asc' | 'score_desc' | 'score_asc' | 'accuracy_desc';
+  page?: number;
+  pageSize?: number;
+}
+
+export interface FilteredSessionsResult {
+  sessions: SessionResult[];
+  totalRecords: number;
+  totalPages: number;
+  currentPage: number;
+  pageSize: number;
 }
 
 // ── Training Intelligence & Recommendation Types ──────────────────────

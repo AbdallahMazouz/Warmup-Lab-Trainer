@@ -669,12 +669,59 @@ export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
   },
 };
 
+export const DIFFICULTY_ORDER: DifficultyId[] = ['beginner', 'intermediate', 'advanced', 'pro'];
+
+/**
+ * Deterministically clamps target difficulty to the nearest supported tier.
+ * For equidistant ties, prefers the lower difficulty tier.
+ * If supportedDifficulties is empty or invalid, preserves targetDifficulty.
+ */
+export function clampDifficultyToSupported(
+  targetDifficulty: DifficultyId,
+  supportedDifficulties?: DifficultyId[]
+): DifficultyId {
+  if (!Array.isArray(supportedDifficulties) || supportedDifficulties.length === 0) {
+    return targetDifficulty;
+  }
+  if (supportedDifficulties.includes(targetDifficulty)) {
+    return targetDifficulty;
+  }
+
+  const validSupported = supportedDifficulties.filter((d): d is DifficultyId => DIFFICULTY_ORDER.includes(d));
+  if (validSupported.length === 0) {
+    return targetDifficulty;
+  }
+
+  // Sort ascending by DIFFICULTY_ORDER so earlier (lower) tier wins tie-breaks
+  validSupported.sort((a, b) => DIFFICULTY_ORDER.indexOf(a) - DIFFICULTY_ORDER.indexOf(b));
+
+  const targetIdx = DIFFICULTY_ORDER.indexOf(targetDifficulty);
+  if (targetIdx === -1) {
+    return validSupported[0];
+  }
+
+  let bestTier: DifficultyId = validSupported[0];
+  let bestDist = Infinity;
+
+  for (const tier of validSupported) {
+    const tierIdx = DIFFICULTY_ORDER.indexOf(tier);
+    const dist = Math.abs(tierIdx - targetIdx);
+    if (dist < bestDist) {
+      bestDist = dist;
+      bestTier = tier;
+    }
+  }
+
+  return bestTier;
+}
+
 export function applyDifficultyPreset(
   baseConfig: ScenarioConfig,
   difficulty: DifficultyId
 ): ScenarioConfig {
   const pristine = getScenarioById(baseConfig.id) ?? baseConfig;
-  const preset = DIFFICULTY_PRESETS[difficulty] ?? DIFFICULTY_PRESETS.intermediate;
+  const effectiveDifficulty = clampDifficultyToSupported(difficulty, pristine.supportedDifficulties);
+  const preset = DIFFICULTY_PRESETS[effectiveDifficulty] ?? DIFFICULTY_PRESETS.intermediate;
   const rawSpeed = pristine.targetSpeedMultiplier * preset.speedMultiplier;
   const speed = Math.max(0, Math.min(3.5, rawSpeed));
   const rawDirChange = preset.directionChangeMultiplier;
@@ -685,7 +732,7 @@ export function applyDifficultyPreset(
 
   return {
     ...pristine,
-    difficulty,
+    difficulty: effectiveDifficulty,
     targetSpeedMultiplier: Number(speed.toFixed(2)),
     directionChangeMultiplier: Number(dirChange.toFixed(2)),
     targetLifetimeSec: lifetime !== undefined ? Number(lifetime.toFixed(2)) : undefined,

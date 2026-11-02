@@ -107,6 +107,15 @@ export class UIManager {
   private selectedTrendScenario = 'flick-static';
   private selectedTrendDifficulty: DifficultyId | 'all' = 'all';
 
+  // Session History Management & Pagination
+  private historyPage = 1;
+  private historyPageSize = 10;
+  private historyCategoryFilter = 'all';
+  private historyDifficultyFilter: DifficultyId | 'all' = 'all';
+  private historySortBy: 'date_desc' | 'date_asc' | 'score_desc' | 'score_asc' | 'accuracy_desc' = 'date_desc';
+  private historyFeedbackMessage: { type: 'success' | 'error'; text: string } | null = null;
+  private isClearModalOpen = false;
+
   // HUD elements
   private hudEl!: HTMLElement;
   private timerEl!: HTMLElement;
@@ -153,13 +162,13 @@ export class UIManager {
 
   private buildBaseDOM(): void {
     this.appContainer.innerHTML = `
-      <nav class="nav">
-        <a href="#" class="nav-logo" data-page="home">VALO <span>WARMUP</span></a>
-        <div class="nav-link active" data-page="home">Home</div>
-        <div class="nav-link" data-page="scenarios">Scenarios</div>
-        <div class="nav-link" data-page="plans">Warm-Up Plans</div>
-        <div class="nav-link" data-page="stats">Statistics</div>
-        <div class="nav-link" data-page="settings">Settings</div>
+      <nav class="nav" role="navigation" aria-label="Main Navigation">
+        <a href="#" class="nav-logo" data-page="home" aria-label="Valo Warmup Home">VALO <span>WARMUP</span></a>
+        <button type="button" class="nav-link active" data-page="home">Home</button>
+        <button type="button" class="nav-link" data-page="scenarios">Scenarios</button>
+        <button type="button" class="nav-link" data-page="plans">Warm-Up Plans</button>
+        <button type="button" class="nav-link" data-page="stats">Statistics</button>
+        <button type="button" class="nav-link" data-page="settings">Settings</button>
         <div class="nav-spacer"></div>
         <button class="btn btn-primary btn-sm" id="btn-quick-play">START TRAINING</button>
       </nav>
@@ -234,7 +243,7 @@ export class UIManager {
       </div>
 
       <!-- Toast container -->
-      <div id="toast-container"></div>
+      <div id="toast-container" aria-live="polite" aria-atomic="true"></div>
     `;
 
     // Cache elements
@@ -296,9 +305,15 @@ export class UIManager {
       }
     };
 
-    // ESC key to stop session or exit result screen cleanly
+    // ESC key to dismiss modal, stop session or exit result screen cleanly
     this.windowKeyHandler = (e: KeyboardEvent) => {
-      if (e.code === 'Escape') {
+      if (e.code === 'Escape' || e.key === 'Escape') {
+        if (this.isClearModalOpen) {
+          this.isClearModalOpen = false;
+          this.renderPage(this.currentPage);
+          (document.getElementById('btn-clear-history') as HTMLElement | null)?.focus();
+          return;
+        }
         if (this.engine.isRunning && this.lockOverlay.classList.contains('visible')) {
           this.exitToMenu();
         } else if (this.resultOverlay.classList.contains('visible') && !this.activeRoutine) {
@@ -313,6 +328,9 @@ export class UIManager {
     // Window resize
     this.windowResizeHandler = () => {
       this.engine.renderer.resize(window.innerWidth, window.innerHeight);
+      if (this.canvas.classList.contains('visible') && !this.engine.isRunning) {
+        this.engine.renderFrame();
+      }
     };
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', this.windowResizeHandler);
@@ -468,7 +486,7 @@ export class UIManager {
             const totalSec = (r.totalElapsedSec ?? r.totalDurationSec) % 60;
             const badgeLabel = `${activeMin} Min Active (${totalMin}m ${totalSec.toString().padStart(2, '0')}s Total)`;
             return `
-              <div class="card scenario-card" data-routine="${r.id}">
+              <div class="card scenario-card" data-routine="${r.id}" role="button" tabindex="0" aria-label="Start ${r.name} routine">
                 <div class="badge badge-teal">${badgeLabel}</div>
                 <div class="scenario-card-title mt-8">${r.name}</div>
                 <p class="scenario-card-desc">${r.description}</p>
@@ -539,11 +557,19 @@ export class UIManager {
     });
 
     container.querySelectorAll('[data-routine]').forEach(el => {
-      el.addEventListener('click', () => {
+      const activate = () => {
         const rId = (el as HTMLElement).dataset.routine;
         const routine = TRAINING_ROUTINES.find(r => r.id === rId);
         if (routine) {
           this.startRoutine(routine);
+        }
+      };
+      el.addEventListener('click', activate);
+      el.addEventListener('keydown', (e: Event) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === 'Enter' || ke.key === ' ') {
+          ke.preventDefault();
+          activate();
         }
       });
     });
@@ -585,7 +611,7 @@ export class UIManager {
           ${filtered.map(s => {
             const pb = this.engine.store.getPB(s.id);
             return `
-              <div class="card scenario-card" data-scen="${s.id}">
+              <div class="card scenario-card" data-scen="${s.id}" role="button" tabindex="0" aria-label="Play ${s.name} scenario">
                 <div class="scenario-card-meta">
                   <span class="badge badge-red">${s.category}</span>
                   <span class="badge badge-teal">${s.difficulty}</span>
@@ -616,9 +642,17 @@ export class UIManager {
     });
 
     container.querySelectorAll('[data-scen]').forEach(card => {
-      card.addEventListener('click', () => {
+      const activate = () => {
         const scenId = (card as HTMLElement).dataset.scen;
         if (scenId) this.launchScenario(scenId);
+      };
+      card.addEventListener('click', activate);
+      card.addEventListener('keydown', (e: Event) => {
+        const ke = e as KeyboardEvent;
+        if (ke.key === 'Enter' || ke.key === ' ') {
+          ke.preventDefault();
+          activate();
+        }
       });
     });
   }
@@ -704,16 +738,16 @@ export class UIManager {
     }
 
     const sDelta = trend.scoreDelta ?? 0;
-    const aDelta = trend.accuracyDelta ?? 0;
-    const hsDelta = trend.headshotDelta ?? 0;
+    const aDelta = trend.accuracyDelta;
+    const hsDelta = trend.headshotDelta;
 
     const sClass = sDelta > 0 ? 'trend-up' : (sDelta < 0 ? 'trend-down' : 'trend-neutral');
-    const aClass = aDelta > 0 ? 'trend-up' : (aDelta < 0 ? 'trend-down' : 'trend-neutral');
-    const hsClass = hsDelta > 0 ? 'trend-up' : (hsDelta < 0 ? 'trend-down' : 'trend-neutral');
+    const aClass = typeof aDelta === 'number' ? (aDelta > 0 ? 'trend-up' : (aDelta < 0 ? 'trend-down' : 'trend-neutral')) : 'trend-neutral';
+    const hsClass = typeof hsDelta === 'number' ? (hsDelta > 0 ? 'trend-up' : (hsDelta < 0 ? 'trend-down' : 'trend-neutral')) : 'trend-neutral';
 
     const sSign = sDelta > 0 ? '+' : '';
-    const aSign = aDelta > 0 ? '+' : '';
-    const hsSign = hsDelta > 0 ? '+' : '';
+    const aSign = typeof aDelta === 'number' && aDelta > 0 ? '+' : '';
+    const hsSign = typeof hsDelta === 'number' && hsDelta > 0 ? '+' : '';
 
     let reactionDisplay = '<span class="text-dim">N/A (Tracking Drill)</span>';
     if (trend.meaningfulReactionTime) {
@@ -758,7 +792,7 @@ export class UIManager {
           <div style="background:var(--panel); padding:12px; border-radius:var(--r-sm); border:1px solid var(--border);">
             <span class="text-dim text-xs uppercase" style="display:block;">Score Delta</span>
             <div style="font-family:var(--font-game); font-size:1.4rem; font-weight:700;" class="${sClass}">
-              ${sSign}${sDelta.toLocaleString()}
+              ${sSign}${sDelta.toLocaleString()} pts
             </div>
             <span class="text-dim text-xs">${trend.latest?.score.toLocaleString()} vs ${trend.previous?.score.toLocaleString()}</span>
           </div>
@@ -766,23 +800,28 @@ export class UIManager {
           <div style="background:var(--panel); padding:12px; border-radius:var(--r-sm); border:1px solid var(--border);">
             <span class="text-dim text-xs uppercase" style="display:block;">Accuracy Delta</span>
             <div style="font-family:var(--font-game); font-size:1.4rem; font-weight:700;" class="${aClass}">
-              ${aSign}${aDelta.toFixed(1)}%
+              ${typeof aDelta === 'number' ? `${aSign}${aDelta.toFixed(1)}%` : '<span class="text-dim font-game" style="font-size:1.15rem;">Untested</span>'}
             </div>
-            <span class="text-dim text-xs">${trend.latest?.accuracy.toFixed(1)}% vs ${trend.previous?.accuracy.toFixed(1)}%</span>
+            <span class="text-dim text-xs">${typeof aDelta === 'number' ? `${trend.latest?.accuracy.toFixed(1)}% vs ${trend.previous?.accuracy.toFixed(1)}%` : 'Insufficient shots (&lt; 5)'}</span>
           </div>
 
           <div style="background:var(--panel); padding:12px; border-radius:var(--r-sm); border:1px solid var(--border);">
             <span class="text-dim text-xs uppercase" style="display:block;">Headshot Rate Delta</span>
             <div style="font-family:var(--font-game); font-size:1.4rem; font-weight:700;" class="${hsClass}">
-              ${hsSign}${hsDelta.toFixed(1)}%
+              ${typeof hsDelta === 'number' ? `${hsSign}${hsDelta.toFixed(1)}%` : '<span class="text-dim font-game" style="font-size:1.15rem;">Untested</span>'}
             </div>
-            <span class="text-dim text-xs">Latest vs previous</span>
+            <span class="text-dim text-xs">${typeof hsDelta === 'number' ? 'Latest vs previous' : 'Insufficient shots (&lt; 5)'}</span>
           </div>
 
           <div style="background:var(--panel); padding:12px; border-radius:var(--r-sm); border:1px solid var(--border);">
             <span class="text-dim text-xs uppercase" style="display:block;">Reaction Time Delta</span>
             <div style="font-size:1.15rem; margin-top:4px;">
               ${reactionDisplay}
+            </div>
+            <span class="text-dim text-xs">${trend.meaningfulReactionTime ? `${trend.latest?.avgReactionMs ?? 0}ms vs ${trend.previous?.avgReactionMs ?? 0}ms` : 'Not applicable'}</span>
+          </div>
+        </div>
+      </div>
             </div>
             <span class="text-dim text-xs">${trend.meaningfulReactionTime ? `${trend.latest?.avgReactionMs ?? 0}ms vs ${trend.previous?.avgReactionMs ?? 0}ms` : 'Not applicable'}</span>
           </div>
@@ -924,10 +963,9 @@ export class UIManager {
     const recentStats = this.engine.store.getRecentStats(10);
     const pbs = this.engine.store.getAllPBs();
     const pbList = Object.values(pbs);
-    const sessions = this.engine.store.getRecentSessions(20);
     const routineSummaries = this.engine.store.getRoutineSummaries(10);
     const bestScenarios = this.engine.store.getBestPerformingScenarios(5);
-    const allSessions = this.engine.store.getSessions(undefined, 50);
+    const allSessions = this.engine.store.getSessions(undefined, 100);
     const preferredDifficulty = allSessions[0]?.difficulty || 'intermediate';
     const rec = generateRecommendation(allSessions, preferredDifficulty);
 
@@ -938,6 +976,13 @@ export class UIManager {
             <h2>TRAINING PROGRESS DASHBOARD</h2>
             <span class="section-sub">Comprehensive aim analytics, consistency metrics, and personal records</span>
           </div>
+
+          ${this.historyFeedbackMessage ? `
+            <div role="status" aria-live="polite" style="padding:10px 14px; border-radius:var(--r-sm); margin-bottom:16px; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; background:${this.historyFeedbackMessage.type === 'success' ? 'rgba(0,255,136,0.15)' : 'rgba(255,70,85,0.15)'}; border:1px solid ${this.historyFeedbackMessage.type === 'success' ? 'var(--green)' : 'var(--red)'}; color:${this.historyFeedbackMessage.type === 'success' ? 'var(--green)' : 'var(--red)'};">
+              <span>${this.historyFeedbackMessage.text}</span>
+              <button id="btn-dismiss-feedback" aria-label="Dismiss notification" style="background:none; border:none; color:inherit; font-weight:700; cursor:pointer;">&times;</button>
+            </div>
+          ` : ''}
 
           <div class="card" style="text-align:center; padding:48px 24px;">
             <div style="font-size:3rem; margin-bottom:12px;">🧠</div>
@@ -1113,7 +1158,7 @@ export class UIManager {
           ${pbList.length === 0 ? `
             <p class="text-dim text-sm">No personal bests recorded yet.</p>
           ` : `
-            <div style="overflow-x:auto;">
+            <div class="table-scroll-wrapper" style="overflow-x:auto;">
               <table style="width:100%; border-collapse:collapse; text-align:left; font-size:0.9rem;">
                 <thead>
                   <tr style="border-bottom:1px solid var(--border-2); color:var(--text-dim); text-transform:uppercase; font-size:0.75rem; letter-spacing:0.08em;">
@@ -1153,7 +1198,7 @@ export class UIManager {
           ${routineSummaries.length === 0 ? `
             <p class="text-dim text-sm">No warm-up routines completed yet. Head to Warm-Up Plans to complete a 5, 10, or 20-minute structured routine!</p>
           ` : `
-            <div style="overflow-x:auto;">
+            <div class="table-scroll-wrapper" style="overflow-x:auto;">
               <table style="width:100%; border-collapse:collapse; text-align:left; font-size:0.9rem;">
                 <thead>
                   <tr style="border-bottom:1px solid var(--border-2); color:var(--text-dim); text-transform:uppercase; font-size:0.75rem; letter-spacing:0.08em;">
@@ -1200,63 +1245,172 @@ export class UIManager {
           `}
         </div>
 
-        <!-- Recent Session History -->
-        <div class="card">
-          <h3 class="mb-16">RECENT DRILL SESSIONS (LATEST 20)</h3>
-          ${sessions.length === 0 ? `
-            <p class="text-dim text-sm">No session logs available.</p>
-          ` : `
-            <div style="overflow-x:auto;">
-              <table style="width:100%; border-collapse:collapse; text-align:left; font-size:0.9rem;">
-                <thead>
-                  <tr style="border-bottom:1px solid var(--border-2); color:var(--text-dim); text-transform:uppercase; font-size:0.75rem; letter-spacing:0.08em;">
-                    <th style="padding:10px;">Scenario</th>
-                    <th style="padding:10px;">Difficulty</th>
-                    <th style="padding:10px;">Score</th>
-                    <th style="padding:10px;">Accuracy</th>
-                    <th style="padding:10px;">Headshot %</th>
-                    <th style="padding:10px;">Hits / Misses</th>
-                    <th style="padding:10px;">Targets / Min</th>
-                    <th style="padding:10px;">Avg Reaction</th>
-                    <th style="padding:10px;">Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${sessions.map(s => {
-                    const sc = getScenarioById(s.scenarioId);
-                    const isReactionMeaningful = sc ? sc.meaningfulReactionTime : true;
-                    const hsPct = typeof s.headshotPct === 'number' && Number.isFinite(s.headshotPct)
-                      ? `${s.headshotPct.toFixed(1)}%`
-                      : (s.hits > 0 ? `${((s.headshots / s.hits) * 100).toFixed(1)}%` : '0.0%');
-                    const tpm = typeof s.targetsPerMinute === 'number' && Number.isFinite(s.targetsPerMinute)
-                      ? s.targetsPerMinute.toFixed(1)
-                      : (s.durationSec > 0 ? ((s.hits / s.durationSec) * 60).toFixed(1) : '0.0');
-
-                    return `
-                      <tr style="border-bottom:1px solid var(--border);">
-                        <td style="padding:12px 10px; font-weight:600;">${s.scenarioName}</td>
-                        <td style="padding:12px 10px;"><span class="badge badge-red">${s.difficulty ? s.difficulty.toUpperCase() : 'INTERMEDIATE'}</span></td>
-                        <td style="padding:12px 10px; font-weight:700; color:var(--text); font-family:var(--font-game); font-size:1.1rem;">${s.score.toLocaleString()}</td>
-                        <td style="padding:12px 10px; color:var(--teal); font-weight:600;">${s.accuracy.toFixed(1)}%</td>
-                        <td style="padding:12px 10px; color:var(--gold); font-weight:600;">${hsPct}</td>
-                        <td style="padding:12px 10px;"><span class="text-green">${s.hits}</span> / <span class="text-red">${s.misses}</span></td>
-                        <td style="padding:12px 10px;">${tpm}</td>
-                        <td style="padding:12px 10px;">${isReactionMeaningful && s.avgReactionMs > 0 ? `${s.avgReactionMs} ms` : 'N/A'}</td>
-                        <td style="padding:12px 10px; color:var(--text-dim); font-size:0.8rem;">${new Date(s.timestamp).toLocaleDateString()}</td>
-                      </tr>
-                    `;
-                  }).join('')}
-                </tbody>
-              </table>
+        <!-- Session History Management (Paginated & Filterable) -->
+        <div class="card" id="session-history-container">
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+            <div>
+              <h3 style="margin:0 0 4px;">SESSION HISTORY & DIAGNOSTICS</h3>
+              <span class="section-sub">Detailed records of individual drill attempts with client-side export and import</span>
             </div>
-          `}
+            <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+              <button class="btn btn-sm btn-secondary" id="btn-export-history" title="Export all stored sessions as JSON">
+                📥 EXPORT JSON
+              </button>
+              <button class="btn btn-sm btn-secondary" id="btn-import-history" title="Import sessions from JSON file">
+                📤 IMPORT JSON
+              </button>
+              <input type="file" id="input-import-history" accept=".json,application/json" style="display:none;" />
+              <button class="btn btn-sm btn-secondary text-red" id="btn-clear-history" title="Clear drill session records" style="border-color:rgba(255,70,85,0.4);">
+                🗑️ CLEAR HISTORY
+              </button>
+            </div>
+          </div>
+
+          <!-- Notification Toast (if any) -->
+          ${this.historyFeedbackMessage ? `
+            <div role="status" aria-live="polite" style="padding:10px 14px; border-radius:var(--r-sm); margin-bottom:16px; font-size:0.85rem; display:flex; justify-content:space-between; align-items:center; background:${this.historyFeedbackMessage.type === 'success' ? 'rgba(0,255,136,0.15)' : 'rgba(255,70,85,0.15)'}; border:1px solid ${this.historyFeedbackMessage.type === 'success' ? 'var(--green)' : 'var(--red)'}; color:${this.historyFeedbackMessage.type === 'success' ? 'var(--green)' : 'var(--red)'};">
+              <span>${this.historyFeedbackMessage.text}</span>
+              <button id="btn-dismiss-feedback" aria-label="Dismiss notification" style="background:none; border:none; color:inherit; font-weight:700; cursor:pointer;">&times;</button>
+            </div>
+          ` : ''}
+
+          <!-- Filter and Sort Bar -->
+          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:16px; padding:10px 12px; background:var(--panel-2); border-radius:var(--r-sm); border:1px solid var(--border);">
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <label class="text-dim text-xs uppercase" style="letter-spacing:0.06em;">Filter:</label>
+              <select id="history-filter-cat" class="form-select" style="background:var(--panel); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:4px 8px; font-size:0.82rem;">
+                <option value="all" ${this.historyCategoryFilter === 'all' ? 'selected' : ''}>All Categories</option>
+                <option value="flick" ${this.historyCategoryFilter === 'flick' ? 'selected' : ''}>Flicks</option>
+                <option value="tracking" ${this.historyCategoryFilter === 'tracking' ? 'selected' : ''}>Tracking</option>
+                <option value="tactical" ${this.historyCategoryFilter === 'tactical' ? 'selected' : ''}>Tactical</option>
+                <option value="flash" ${this.historyCategoryFilter === 'flash' ? 'selected' : ''}>Flash Recovery</option>
+                <option value="reaction" ${this.historyCategoryFilter === 'reaction' ? 'selected' : ''}>Reaction Time</option>
+                <option value="hybrid" ${this.historyCategoryFilter === 'hybrid' ? 'selected' : ''}>Hybrid</option>
+              </select>
+
+              <select id="history-filter-diff" class="form-select" style="background:var(--panel); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:4px 8px; font-size:0.82rem;">
+                <option value="all" ${this.historyDifficultyFilter === 'all' ? 'selected' : ''}>All Difficulties</option>
+                <option value="beginner" ${this.historyDifficultyFilter === 'beginner' ? 'selected' : ''}>Beginner</option>
+                <option value="intermediate" ${this.historyDifficultyFilter === 'intermediate' ? 'selected' : ''}>Intermediate</option>
+                <option value="advanced" ${this.historyDifficultyFilter === 'advanced' ? 'selected' : ''}>Advanced</option>
+                <option value="pro" ${this.historyDifficultyFilter === 'pro' ? 'selected' : ''}>Pro</option>
+              </select>
+            </div>
+
+            <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+              <label class="text-dim text-xs uppercase" style="letter-spacing:0.06em;">Sort:</label>
+              <select id="history-sort-by" class="form-select" style="background:var(--panel); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:4px 8px; font-size:0.82rem;">
+                <option value="date_desc" ${this.historySortBy === 'date_desc' ? 'selected' : ''}>Date (Newest First)</option>
+                <option value="date_asc" ${this.historySortBy === 'date_asc' ? 'selected' : ''}>Date (Oldest First)</option>
+                <option value="score_desc" ${this.historySortBy === 'score_desc' ? 'selected' : ''}>Score (High to Low)</option>
+                <option value="accuracy_desc" ${this.historySortBy === 'accuracy_desc' ? 'selected' : ''}>Accuracy (High to Low)</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Table -->
+          ${(() => {
+            const filteredResult = this.engine.store.getFilteredSessions({
+              category: this.historyCategoryFilter,
+              difficulty: this.historyDifficultyFilter,
+              sortBy: this.historySortBy,
+              page: this.historyPage,
+              pageSize: this.historyPageSize,
+            });
+            this.historyPage = filteredResult.currentPage;
+
+            if (filteredResult.sessions.length === 0) {
+              return `<p class="text-dim text-sm" style="padding:20px; text-align:center;">No matching session records found.</p>`;
+            }
+
+            return `
+              <div class="table-scroll-wrapper" style="overflow-x:auto;">
+                <table style="width:100%; border-collapse:collapse; text-align:left; font-size:0.9rem;">
+                  <thead>
+                    <tr style="border-bottom:1px solid var(--border-2); color:var(--text-dim); text-transform:uppercase; font-size:0.75rem; letter-spacing:0.08em;">
+                      <th style="padding:10px;">Scenario</th>
+                      <th style="padding:10px;">Difficulty</th>
+                      <th style="padding:10px;">Score</th>
+                      <th style="padding:10px;">Accuracy</th>
+                      <th style="padding:10px;">Headshot %</th>
+                      <th style="padding:10px;">Hits / Misses</th>
+                      <th style="padding:10px;">Targets / Min</th>
+                      <th style="padding:10px;">Avg Reaction</th>
+                      <th style="padding:10px;">Date</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${filteredResult.sessions.map(s => {
+                      const sc = getScenarioById(s.scenarioId);
+                      const isReactionMeaningful = sc ? sc.meaningfulReactionTime : true;
+                      const hsPct = typeof s.headshotPct === 'number' && Number.isFinite(s.headshotPct)
+                        ? `${s.headshotPct.toFixed(1)}%`
+                        : (s.hits > 0 ? `${((s.headshots / s.hits) * 100).toFixed(1)}%` : '0.0%');
+                      const tpm = typeof s.targetsPerMinute === 'number' && Number.isFinite(s.targetsPerMinute)
+                        ? s.targetsPerMinute.toFixed(1)
+                        : (s.durationSec > 0 ? ((s.hits / s.durationSec) * 60).toFixed(1) : '0.0');
+
+                      return `
+                        <tr style="border-bottom:1px solid var(--border);">
+                          <td style="padding:12px 10px; font-weight:600;">${s.scenarioName}</td>
+                          <td style="padding:12px 10px;"><span class="badge badge-red">${s.difficulty ? s.difficulty.toUpperCase() : 'INTERMEDIATE'}</span></td>
+                          <td style="padding:12px 10px; font-weight:700; color:var(--text); font-family:var(--font-game); font-size:1.1rem;">${s.score.toLocaleString()}</td>
+                          <td style="padding:12px 10px; color:var(--teal); font-weight:600;">${s.accuracy.toFixed(1)}%</td>
+                          <td style="padding:12px 10px; color:var(--gold); font-weight:600;">${hsPct}</td>
+                          <td style="padding:12px 10px;"><span class="text-green">${s.hits}</span> / <span class="text-red">${s.misses}</span></td>
+                          <td style="padding:12px 10px;">${tpm}</td>
+                          <td style="padding:12px 10px;">${isReactionMeaningful && s.avgReactionMs > 0 ? `${s.avgReactionMs} ms` : 'N/A'}</td>
+                          <td style="padding:12px 10px; color:var(--text-dim); font-size:0.8rem;">${new Date(s.timestamp).toLocaleDateString()}</td>
+                        </tr>
+                      `;
+                    }).join('')}
+                  </tbody>
+                </table>
+              </div>
+
+              <!-- Pagination Controls -->
+              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:16px; padding-top:12px; border-top:1px solid var(--border); flex-wrap:wrap; gap:10px;">
+                <span class="text-dim text-xs">
+                  Showing page <strong>${filteredResult.currentPage}</strong> of <strong>${filteredResult.totalPages}</strong> &bull; Total records: <strong>${filteredResult.totalRecords}</strong>
+                </span>
+                <div style="display:flex; gap:8px;">
+                  <button class="btn btn-sm btn-secondary" id="btn-history-prev" ${filteredResult.currentPage <= 1 ? 'disabled' : ''}>
+                    &laquo; PREV
+                  </button>
+                  <button class="btn btn-sm btn-secondary" id="btn-history-next" ${filteredResult.currentPage >= filteredResult.totalPages ? 'disabled' : ''}>
+                    NEXT &raquo;
+                  </button>
+                </div>
+              </div>
+            `;
+          })()}
+        </div>
+
+        <!-- Clear Confirmation Modal -->
+        <div id="modal-clear-history" role="dialog" aria-modal="true" aria-labelledby="clear-modal-title" style="display:${this.isClearModalOpen ? 'flex' : 'none'}; position:fixed; top:0; left:0; width:100vw; height:100vh; background:rgba(0,0,0,0.8); z-index:1000; align-items:center; justify-content:center;">
+          <div class="card" style="max-width:480px; width:90%; border:1px solid var(--red); background:var(--panel-2); padding:24px;">
+            <div style="display:flex; align-items:center; gap:10px; margin-bottom:12px;">
+              <span style="font-size:1.6rem;" aria-hidden="true">⚠️</span>
+              <h3 id="clear-modal-title" style="margin:0; color:var(--red);">CLEAR DRILL SESSION HISTORY?</h3>
+            </div>
+            <p style="font-size:0.9rem; line-height:1.5; color:var(--text); margin-bottom:16px;">
+              This will permanently delete all individual drill session records (<strong>${this.engine.store.totalSessions()}</strong> stored).
+            </p>
+            <p style="font-size:0.85rem; line-height:1.5; color:var(--text-dim); margin-bottom:24px; background:var(--panel); padding:10px; border-radius:var(--r-sm); border-left:3px solid var(--teal);">
+              🛡️ <strong>Safety Guarantee:</strong> Your <strong>Personal Bests (PBs)</strong> and <strong>Completed Warm-Up Routine history</strong> will NOT be deleted.
+            </p>
+            <div style="display:flex; justify-content:flex-end; gap:12px;">
+              <button class="btn btn-secondary btn-sm" id="btn-cancel-clear">CANCEL</button>
+              <button class="btn btn-primary btn-sm" id="btn-confirm-clear" style="background:var(--red); border-color:var(--red);">CONFIRM CLEAR</button>
+            </div>
+          </div>
         </div>
       </div>
     `;
   }
 
   private attachStatsListeners(container: HTMLElement): void {
-    const allSessions = this.engine.store.getSessions(undefined, 50);
+    const allSessions = this.engine.store.getSessions(undefined, 100);
     const preferredDifficulty = allSessions[0]?.difficulty || 'intermediate';
     const rec = generateRecommendation(allSessions, preferredDifficulty);
 
@@ -1293,6 +1447,173 @@ export class UIManager {
 
     scenSelect?.addEventListener('change', updateTrend);
     diffSelect?.addEventListener('change', updateTrend);
+
+    // ── Session History Management Listeners ─────────────────────────────
+    container.querySelector('#btn-export-history')?.addEventListener('click', () => {
+      const jsonStr = this.engine.store.exportSessionsJSON();
+      const dateStr = new Date().toISOString().split('T')[0];
+      const filename = `vwt-session-history-${dateStr}.json`;
+      try {
+        const blob = new Blob([jsonStr], { type: 'application/json' });
+        const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
+          ? URL.createObjectURL(blob)
+          : 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonStr);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        if (typeof url === 'string' && url.startsWith('blob:') && typeof URL.revokeObjectURL === 'function') {
+          URL.revokeObjectURL(url);
+        }
+        this.historyFeedbackMessage = {
+          type: 'success',
+          text: `Exported ${this.engine.store.totalSessions()} session(s) to ${filename}.`,
+        };
+      } catch (err: any) {
+        this.historyFeedbackMessage = {
+          type: 'error',
+          text: `Export failed: ${err?.message || 'Unknown error'}`,
+        };
+      }
+      this.renderPage(this.currentPage);
+    });
+
+    const fileInput = container.querySelector('#input-import-history') as HTMLInputElement | null;
+    container.querySelector('#btn-import-history')?.addEventListener('click', () => {
+      fileInput?.click();
+    });
+
+    fileInput?.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const content = typeof e.target?.result === 'string' ? e.target.result : '';
+        const res = this.engine.store.importSessionsJSON(content);
+        if (res.success) {
+          this.historyPage = 1;
+          const capNotice = typeof res.excludedByCapCount === 'number' && res.excludedByCapCount > 0
+            ? ` (${res.retainedCount ?? res.importedCount} retained, ${res.excludedByCapCount} excluded by 100-session limit)`
+            : '';
+          this.historyFeedbackMessage = {
+            type: 'success',
+            text: `Import completed: ${res.importedCount} imported${capNotice}, ${res.duplicateCount} duplicate(s) skipped${res.invalidCount > 0 ? `, ${res.invalidCount} invalid record(s) discarded` : ''}.`,
+          };
+        } else {
+          this.historyFeedbackMessage = {
+            type: 'error',
+            text: res.error || 'Import failed: Invalid file format.',
+          };
+        }
+        fileInput.value = '';
+        this.renderPage(this.currentPage);
+      };
+
+      reader.onerror = () => {
+        this.historyFeedbackMessage = {
+          type: 'error',
+          text: 'File read error: Failed to read selected file.',
+        };
+        fileInput.value = '';
+        this.renderPage(this.currentPage);
+      };
+
+      reader.readAsText(file);
+    });
+
+    const modalEl = container.querySelector('#modal-clear-history') as HTMLElement | null;
+    const cancelClearBtn = container.querySelector('#btn-cancel-clear') as HTMLButtonElement | null;
+    const confirmClearBtn = container.querySelector('#btn-confirm-clear') as HTMLButtonElement | null;
+
+    if (this.isClearModalOpen && modalEl) {
+      cancelClearBtn?.focus();
+
+      modalEl.addEventListener('keydown', (e: KeyboardEvent) => {
+        if (!this.isClearModalOpen) return;
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          e.stopPropagation();
+          this.isClearModalOpen = false;
+          this.renderPage(this.currentPage);
+          (document.getElementById('btn-clear-history') as HTMLElement | null)?.focus();
+        } else if (e.key === 'Tab') {
+          if (e.shiftKey) {
+            if (document.activeElement === cancelClearBtn) {
+              e.preventDefault();
+              confirmClearBtn?.focus();
+            }
+          } else {
+            if (document.activeElement === confirmClearBtn) {
+              e.preventDefault();
+              cancelClearBtn?.focus();
+            }
+          }
+        }
+      });
+    }
+
+    container.querySelector('#btn-clear-history')?.addEventListener('click', () => {
+      this.isClearModalOpen = true;
+      this.renderPage(this.currentPage);
+    });
+
+    cancelClearBtn?.addEventListener('click', () => {
+      this.isClearModalOpen = false;
+      this.renderPage(this.currentPage);
+      (document.getElementById('btn-clear-history') as HTMLElement | null)?.focus();
+    });
+
+    confirmClearBtn?.addEventListener('click', () => {
+      this.engine.store.clearSessions();
+      this.isClearModalOpen = false;
+      this.historyPage = 1;
+      this.historyFeedbackMessage = {
+        type: 'success',
+        text: 'All drill session history cleared. Personal bests and routine records preserved.',
+      };
+      this.renderPage(this.currentPage);
+    });
+
+    const catSelect = container.querySelector('#history-filter-cat') as HTMLSelectElement | null;
+    catSelect?.addEventListener('change', () => {
+      this.historyCategoryFilter = catSelect.value;
+      this.historyPage = 1;
+      this.renderPage(this.currentPage);
+    });
+
+    const histDiffSelect = container.querySelector('#history-filter-diff') as HTMLSelectElement | null;
+    histDiffSelect?.addEventListener('change', () => {
+      this.historyDifficultyFilter = (histDiffSelect.value as DifficultyId | 'all') ?? 'all';
+      this.historyPage = 1;
+      this.renderPage(this.currentPage);
+    });
+
+    const sortSelect = container.querySelector('#history-sort-by') as HTMLSelectElement | null;
+    sortSelect?.addEventListener('change', () => {
+      this.historySortBy = sortSelect.value as any;
+      this.historyPage = 1;
+      this.renderPage(this.currentPage);
+    });
+
+    container.querySelector('#btn-history-prev')?.addEventListener('click', () => {
+      if (this.historyPage > 1) {
+        this.historyPage--;
+        this.renderPage(this.currentPage);
+      }
+    });
+
+    container.querySelector('#btn-history-next')?.addEventListener('click', () => {
+      this.historyPage++;
+      this.renderPage(this.currentPage);
+    });
+
+    container.querySelector('#btn-dismiss-feedback')?.addEventListener('click', () => {
+      this.historyFeedbackMessage = null;
+      this.renderPage(this.currentPage);
+    });
   }
 
   private renderSettingsHTML(): string {
@@ -2026,7 +2347,7 @@ export class UIManager {
     const nextDrillId = isInRoutine ? this.activeRoutine!.scenarioIds[this.activeRoutine!.currentIndex + 1] : null;
     const nextDrillConfig = nextDrillId ? getScenarioById(nextDrillId) : null;
 
-    const allSessions = this.engine.store.getSessions(undefined, 50);
+    const allSessions = this.engine.store.getSessions(undefined, 100);
     const rec = generateRecommendation(allSessions, result.difficulty);
 
     content.innerHTML = `

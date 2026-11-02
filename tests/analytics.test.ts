@@ -136,9 +136,9 @@ describe('Store Persistence, Sanitization & PB Isolation', () => {
     localStorage.clear();
   });
 
-  it('limits session history to a maximum of 50 sessions', () => {
+  it('limits session history to a maximum of 100 sessions', () => {
     const store = new Store();
-    for (let i = 1; i <= 65; i++) {
+    for (let i = 1; i <= 115; i++) {
       store.addSession({
         id: `sess_${i}`,
         scenarioId: 'flick-static',
@@ -159,10 +159,10 @@ describe('Store Persistence, Sanitization & PB Isolation', () => {
       });
     }
 
-    expect(store.totalSessions()).toBe(50);
-    // Most recent session (id: sess_65) must be first
+    expect(store.totalSessions()).toBe(100);
+    // Most recent session (id: sess_115) must be first
     const recent = store.getRecentSessions(1);
-    expect(recent[0].id).toBe('sess_65');
+    expect(recent[0].id).toBe('sess_115');
   });
 
   it('prevents saving duplicate sessions with the same id', () => {
