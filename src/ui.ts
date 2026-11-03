@@ -163,7 +163,7 @@ export class UIManager {
   private buildBaseDOM(): void {
     this.appContainer.innerHTML = `
       <nav class="nav" role="navigation" aria-label="Main Navigation">
-        <a href="#" class="nav-logo" data-page="home" aria-label="Valo Warmup Home">VALO <span>WARMUP</span></a>
+        <a href="#" class="nav-logo" data-page="home" aria-label="WarmupLab Home">WARMUP <span>LAB</span></a>
         <button type="button" class="nav-link active" data-page="home">Home</button>
         <button type="button" class="nav-link" data-page="scenarios">Scenarios</button>
         <button type="button" class="nav-link" data-page="plans">Warm-Up Plans</button>
@@ -1452,7 +1452,7 @@ export class UIManager {
     container.querySelector('#btn-export-history')?.addEventListener('click', () => {
       const jsonStr = this.engine.store.exportSessionsJSON();
       const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `vwt-session-history-${dateStr}.json`;
+      const filename = `warmup-lab-session-history-${dateStr}.json`;
       try {
         const blob = new Blob([jsonStr], { type: 'application/json' });
         const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'

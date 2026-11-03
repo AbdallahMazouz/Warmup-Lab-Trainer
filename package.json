@@ -1,7 +1,7 @@
 {
-  "name": "valo-warmup-trainer",
+  "name": "warmup-lab",
   "version": "1.0.0",
-  "description": "Browser-based VALORANT-inspired 3D aim trainer",
+  "description": "WarmupLab — Browser-based 3D tactical aim trainer",
   "type": "module",
   "scripts": {
     "dev": "vite",

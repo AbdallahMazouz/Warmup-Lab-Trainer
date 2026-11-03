@@ -46,7 +46,7 @@ function init(): void {
 
   requestAnimationFrame(animate);
 
-  console.log('Valo Warmup Trainer initialized successfully.');
+  console.log('WarmupLab initialized successfully.');
 }
 
 // Ensure DOM is ready

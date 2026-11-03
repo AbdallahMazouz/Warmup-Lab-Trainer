@@ -1,10 +1,10 @@
-# Valo Warmup Trainer
+# WarmupLab
 
 A lightweight, zero-install 3D tactical aim trainer built with TypeScript, WebGL (Three.js), and the Web Audio API.
 
 Runs in the browser using relative mouse movement via the Pointer Lock API, velocity-based counter-strafing penalties, procedural weapon recoil, adaptive difficulty progression, and client-side session diagnostics.
 
-[**Demo URL (Configured)**](https://abdallahmazouz.github.io/Valo-Warmup-Trainer/) &bull; [Screenshots](#screenshots) &bull; [Quick Start](#quick-start) &bull; [Scenarios](#training-scenarios--routines) &bull; [Progression System](#adaptive-difficulty-engine) &bull; [Architecture](#architecture)
+[**Cloudflare Pages**](https://warmup-lab.pages.dev) &bull; [**GitHub Pages**](https://abdallahmazouz.github.io/Warmup-Lab-Trainer/) &bull; [Screenshots](#screenshots) &bull; [Quick Start](#quick-start) &bull; [Scenarios](#training-scenarios--routines) &bull; [Progression System](#adaptive-difficulty-engine) &bull; [Architecture](#architecture)
 
 ---
 
@@ -146,7 +146,7 @@ Sound effects are synthesized procedurally at runtime using the Web Audio API wi
 The project consists of 16 TypeScript source files and 1 stylesheet in `src/`, 12 test suites in `tests/`, and documentation assets in `docs/assets/`:
 
 ```
-valo-warmup-trainer/
+warmup-lab/
 ├── index.html                               # HTML entry point, canvas element, embedded SVG favicon
 ├── package.json                             # Dependencies and build/test scripts
 ├── tsconfig.json                            # TypeScript configuration (target ES2022)
@@ -204,8 +204,8 @@ valo-warmup-trainer/
 
 ```bash
 # Clone the repository
-git clone https://github.com/AbdallahMazouz/Valo-Warmup-Trainer.git
-cd Valo-Warmup-Trainer
+git clone https://github.com/AbdallahMazouz/Warmup-Lab-Trainer.git
+cd Warmup-Lab-Trainer
 
 # Install dependencies
 npm install
@@ -246,15 +246,15 @@ npm run preview
 
 The repository includes an automated GitHub Actions workflow ([deploy.yml](.github/workflows/deploy.yml)) configured to run on pushes to `main`. It validates TypeScript types, executes all 247 Vitest tests, builds the production bundle, and deploys to GitHub Pages:
 
-`https://abdallahmazouz.github.io/Valo-Warmup-Trainer/`
+`https://abdallahmazouz.github.io/Warmup-Lab-Trainer/`
 
-Because the production bundle uses relative base paths (`./`) and requires no server runtime or environment variables, the contents of `dist/` can also be hosted on Cloudflare Pages, Netlify, Vercel, or any standard static web server.
+Additionally, because the production bundle uses relative base paths (`./`) and requires no server runtime or environment variables, the contents of `dist/` can be directly hosted on Cloudflare Pages (`https://warmup-lab.pages.dev`), Netlify, Vercel, or any standard static web server.
 
 ---
 
 ## Technical Disclaimer
 
-Valo Warmup Trainer is an independent, standalone web application. It runs in the browser using WebGL and standard web APIs. It does not interact with, inject into, read memory from, or modify VALORANT or any Riot Games software.
+WarmupLab is an independent, standalone web application. It runs in the browser using WebGL and standard web APIs. It does not interact with, inject into, read memory from, or modify VALORANT or any Riot Games software.
 
 ---
 
