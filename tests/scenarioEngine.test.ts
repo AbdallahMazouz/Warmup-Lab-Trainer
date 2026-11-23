@@ -408,17 +408,42 @@ describe('Eight Starter Scenarios Gameplay Rules & Scoring', () => {
     expect(engine.targets.getTarget(target0.id)).toBeUndefined();
   });
 
-  it('Scenario 7 (Operator Flick): enforces bolt-action recovery delay', () => {
+  it('Scenario 7 (Operator Flick): enforces bolt-action recovery delay and accepts initial shot when performance.now() < 1333ms', () => {
+    let mockTime = 120; // Well below Operator cycleTimeMs (1333ms)
+    const nowSpy = vi.spyOn(performance, 'now').mockImplementation(() => mockTime);
+
     const sc = getScenarioById('operator-flick')!;
     engine.startScenario(sc);
 
     const vandalFireSpy = vi.spyOn(engine.vandal, 'fire');
+
+    // 1. Initial shot must be accepted even when performance.now() < 1333ms
     controls.onShoot!();
     expect(vandalFireSpy).toHaveBeenCalledTimes(1);
 
-    // Immediate second shot should be blocked by bolt recovery
+    // 2. Immediate second shot before recovery interval (120 + 500 = 620ms < 120 + 1333ms) must be rejected
+    mockTime = 620;
     controls.onShoot!();
     expect(vandalFireSpy).toHaveBeenCalledTimes(1);
+
+    // 3. Third shot after recovery interval (120 + 1400 = 1520ms >= 120 + 1333ms) must be accepted
+    mockTime = 1520;
+    controls.onShoot!();
+    expect(vandalFireSpy).toHaveBeenCalledTimes(2);
+
+    // 4. Verify Vandal firing behavior remains unaffected
+    const vandalSc = getScenarioById('flick-static')!;
+    engine.startScenario(vandalSc);
+    mockTime = 1600;
+    controls.onShoot!();
+    expect(vandalFireSpy).toHaveBeenCalledTimes(3);
+
+    // Rapid Vandal shot after its cycleTimeMs (102.5ms)
+    mockTime = 1710;
+    controls.onShoot!();
+    expect(vandalFireSpy).toHaveBeenCalledTimes(4);
+
+    nowSpy.mockRestore();
   });
 
   it('Scenario 8 (Friend or Foe): penalizes friendly fire', () => {

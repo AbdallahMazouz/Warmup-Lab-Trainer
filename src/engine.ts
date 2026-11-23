@@ -98,7 +98,7 @@ export class Engine {
   private sessionSaved = false;
 
   // Weapon & Recoil mechanics
-  private lastShotTime = 0;
+  private lastShotTime = -Infinity;
   private recoilIndex = 0;
   private boltRecoveryUntil = 0;
   private sprayBulletsFired = 0;
@@ -215,7 +215,7 @@ export class Engine {
     this.sessionSaved = false;
 
     // Reset weapon & recoil mechanics
-    this.lastShotTime = 0;
+    this.lastShotTime = -Infinity;
     this.recoilIndex = 0;
     this.boltRecoveryUntil = 0;
     this.sprayBulletsFired = 0;
@@ -348,7 +348,7 @@ export class Engine {
     }
 
     // Enforce fire rate limit if configured
-    if (this.resolvedConfig?.weapon.enforceFireRate && (now - this.lastShotTime < this.currentWeapon.cycleTimeMs)) {
+    if (this.resolvedConfig?.weapon.enforceFireRate && Number.isFinite(this.lastShotTime) && (now - this.lastShotTime < this.currentWeapon.cycleTimeMs)) {
       return;
     }
 
