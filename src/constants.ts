@@ -75,6 +75,7 @@ export const LS_SESSIONS    = 'vwt_sessions_v2';
 export const LS_PERSONAL_BESTS = 'vwt_pbs_v2';
 export const LS_ROUTINES    = 'vwt_routines_v2';
 export const LS_PLAYLISTS   = 'vwt_playlists_v1';
+export const LS_CUSTOM_SCENARIOS = 'vwt_custom_scenarios_v1';
 export const LS_MIGRATION_V3_STATUS = 'vwt_migration_v3_status';
 export const LS_MIGRATION_V3_ARCHIVED = 'vwt_migration_v3_archived';
 

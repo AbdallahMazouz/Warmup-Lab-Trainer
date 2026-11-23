@@ -600,12 +600,51 @@ export interface MissEventPayload {
   penalty: number;
 }
 
+export interface EngineHUDState {
+  timeRemaining: number;
+  totalDuration: number;
+  score: number;
+  hits: number;
+  misses: number;
+  accuracy: number;
+  headshots: number;
+  fps: number;
+  isTracking: boolean;
+  isPaused?: boolean;
+  shotsFired?: number;
+  headshotPct?: number;
+  playerSpeed?: number;
+  isStationary?: boolean;
+  activeKeys?: { w: boolean; a: boolean; s: boolean; d: boolean };
+  threatProgress?: number;
+}
+
+export interface FlashEventPayload {
+  intensity: number;
+  durationMs: number;
+}
+
+export interface ScenarioCompleteEventPayload {
+  result: SessionResult;
+  isPB: boolean;
+}
+
+export interface RetaliationHitEventPayload {
+  targetId: string;
+  penalty: number;
+}
+
 export interface GameplayEventMap {
   onSpawn: SpawnEventPayload;
   onHit: HitEventPayload;
   onHeadshot: HeadshotEventPayload;
   onKill: KillEventPayload;
   onMiss: MissEventPayload;
+  onTick: EngineHUDState;
+  onFlash: FlashEventPayload;
+  onScenarioComplete: ScenarioCompleteEventPayload;
+  onMovementInaccurate: void;
+  onRetaliationHit: RetaliationHitEventPayload;
 }
 
 export interface KillEvent {

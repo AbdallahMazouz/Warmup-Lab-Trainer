@@ -292,6 +292,14 @@ export function validateCustomScenarioJSON(input: unknown): ValidationResult {
     errors.push('Scenario duration must be a number between 5 and 600 seconds');
   }
 
+  if (s.description !== undefined) {
+    if (typeof s.description !== 'string') {
+      errors.push('Scenario description must be a string');
+    } else if (s.description.length > 500) {
+      errors.push('Scenario description cannot exceed 500 characters');
+    }
+  }
+
   if (!s.spawner || typeof s.spawner !== 'object') {
     errors.push('Spawner configuration block is required');
   } else {
@@ -303,6 +311,44 @@ export function validateCustomScenarioJSON(input: unknown): ValidationResult {
     }
     if (s.spawner.spawnRadius !== undefined && (typeof s.spawner.spawnRadius !== 'number' || s.spawner.spawnRadius < 2 || s.spawner.spawnRadius > 40)) {
       errors.push('spawner.spawnRadius must be between 2 and 40 metres');
+    }
+
+    // Mode-specific spawner validations
+    if (s.spawner.mode === 'grid') {
+      if (!s.spawner.gridDimensions || typeof s.spawner.gridDimensions !== 'object') {
+        errors.push('spawner.gridDimensions is required for "grid" mode');
+      } else {
+        const { rows, cols, spacingX, spacingY } = s.spawner.gridDimensions;
+        if (typeof rows !== 'number' || !Number.isFinite(rows) || rows < 1 || rows > 20 || !Number.isInteger(rows)) {
+          errors.push('gridDimensions.rows must be an integer between 1 and 20');
+        }
+        if (typeof cols !== 'number' || !Number.isFinite(cols) || cols < 1 || cols > 20 || !Number.isInteger(cols)) {
+          errors.push('gridDimensions.cols must be an integer between 1 and 20');
+        }
+        if (typeof spacingX !== 'number' || !Number.isFinite(spacingX) || spacingX <= 0 || spacingX > 20) {
+          errors.push('gridDimensions.spacingX must be a positive number up to 20');
+        }
+        if (typeof spacingY !== 'number' || !Number.isFinite(spacingY) || spacingY <= 0 || spacingY > 20) {
+          errors.push('gridDimensions.spacingY must be a positive number up to 20');
+        }
+      }
+    } else if (s.spawner.mode === 'fixed_points') {
+      if (!Array.isArray(s.spawner.fixedPoints) || s.spawner.fixedPoints.length === 0) {
+        errors.push('spawner.fixedPoints must be a non-empty array for "fixed_points" mode');
+      } else {
+        for (let i = 0; i < s.spawner.fixedPoints.length; i++) {
+          const pt = s.spawner.fixedPoints[i];
+          if (!pt || typeof pt !== 'object' || typeof pt.x !== 'number' || typeof pt.y !== 'number' || typeof pt.z !== 'number' ||
+              !Number.isFinite(pt.x) || !Number.isFinite(pt.y) || !Number.isFinite(pt.z)) {
+            errors.push(`spawner.fixedPoints[${i}] must have finite numeric x, y, and z coordinates`);
+            break;
+          }
+        }
+      }
+    } else if (s.spawner.mode === 'random_arc') {
+      if (typeof s.spawner.arcDegrees !== 'number' || !Number.isFinite(s.spawner.arcDegrees) || s.spawner.arcDegrees <= 0 || s.spawner.arcDegrees > 360) {
+        errors.push('spawner.arcDegrees must be a number between 1 and 360 for "random_arc" mode');
+      }
     }
   }
 

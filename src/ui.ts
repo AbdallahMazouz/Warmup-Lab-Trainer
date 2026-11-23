@@ -3,6 +3,11 @@
 // =====================================================================
 
 import type { Engine, EngineHUDState } from './engine';
+import { escapeHtml } from './utils';
+import {
+  renderSettingsHTML as renderSettingsViewHTML,
+  attachSettingsListeners as attachSettingsViewListeners,
+} from './views/settingsView';
 import {
   SCENARIOS,
   TRAINING_ROUTINES,
@@ -17,7 +22,6 @@ import type {
   DifficultyId,
   TrainingRoutine,
   RoutineSummary,
-  SoundProfileId,
   RecommendationResult,
   SkillDimensionEvaluation,
   Playlist,
@@ -30,10 +34,6 @@ import {
   convertCustomScenarioToConfig,
   validateCustomScenarioJSON,
 } from './scenarioConfig';
-import {
-  getAllSoundProfiles,
-  getSoundProfile,
-} from './soundProfiles';
 import { calculateRoutineReactionSummary } from './analytics';
 import { generateRecommendation } from './recommendations';
 import {
@@ -417,7 +417,7 @@ export class UIManager {
   }
 
   private bindEngineCallbacks(): void {
-    this.engine.callbacks.onTick = (hud: EngineHUDState) => {
+    const handleTick = (hud: EngineHUDState) => {
       if (hud.isPaused) {
         this.timerEl.textContent = 'PAUSED';
         this.timerEl.className = 'hud-timer warning';
@@ -479,7 +479,7 @@ export class UIManager {
       }
     };
 
-    this.engine.callbacks.onHit = (_pts, headshot) => {
+    const handleHit = (_pts: number, headshot: boolean) => {
       if (headshot) {
         // Show gold headshot marker, hide body-shot marker.
         this.hitMarkerEl.classList.remove('show');
@@ -495,7 +495,7 @@ export class UIManager {
       }
     };
 
-    this.engine.callbacks.onMovementInaccurate = () => {
+    const handleInaccurate = () => {
       this.movementWarningEl.style.display = 'block';
       if (this.movementWarningTimeout) clearTimeout(this.movementWarningTimeout);
       this.movementWarningTimeout = setTimeout(() => {
@@ -504,7 +504,7 @@ export class UIManager {
       }, 700);
     };
 
-    this.engine.callbacks.onFlash = (intensity: number, durationMs: number) => {
+    const handleFlash = (intensity: number, durationMs: number) => {
       this.flashOverlay.style.opacity = `${intensity}`;
       if (this.flashTimeout) clearTimeout(this.flashTimeout);
       if (this.flashTransitionTimeout) clearTimeout(this.flashTransitionTimeout);
@@ -520,11 +520,11 @@ export class UIManager {
       }, 120);
     };
 
-    this.engine.callbacks.onScenarioComplete = (result: SessionResult, isPB: boolean) => {
+    const handleComplete = (result: SessionResult, isPB: boolean) => {
       this.showResultsScreen(result, isPB);
     };
 
-    this.engine.callbacks.onRetaliationHit = (_targetId: string, penalty: number) => {
+    const handleRetaliate = (_targetId: string, penalty: number) => {
       this.threatHitActive = true;
       if (this.threatOverlay) {
         this.threatOverlay.classList.remove('hit');
@@ -538,6 +538,22 @@ export class UIManager {
         if (this.threatOverlay) this.threatOverlay.classList.remove('hit');
       }, 500);
     };
+
+    // Subscriptions on typed GameplayEventEmitter
+    this.engine.events.on('onTick', handleTick);
+    this.engine.events.on('onHit', (p) => handleHit(p.score, p.headshot));
+    this.engine.events.on('onMovementInaccurate', handleInaccurate);
+    this.engine.events.on('onFlash', (p) => handleFlash(p.intensity, p.durationMs));
+    this.engine.events.on('onScenarioComplete', (p) => handleComplete(p.result, p.isPB));
+    this.engine.events.on('onRetaliationHit', (p) => handleRetaliate(p.targetId, p.penalty));
+
+    // Backward compatibility callback bridge
+    this.engine.callbacks.onTick = handleTick;
+    this.engine.callbacks.onHit = handleHit;
+    this.engine.callbacks.onMovementInaccurate = handleInaccurate;
+    this.engine.callbacks.onFlash = handleFlash;
+    this.engine.callbacks.onScenarioComplete = handleComplete;
+    this.engine.callbacks.onRetaliationHit = handleRetaliate;
   }
 
   navigateTo(page: PageId): void {
@@ -627,10 +643,10 @@ export class UIManager {
             const totalSec = (r.totalElapsedSec ?? r.totalDurationSec) % 60;
             const badgeLabel = `${activeMin} Min Active (${totalMin}m ${totalSec.toString().padStart(2, '0')}s Total)`;
             return `
-              <div class="card scenario-card" data-routine="${r.id}" role="button" tabindex="0" aria-label="Start ${r.name} routine">
+              <div class="card scenario-card" data-routine="${r.id}" role="button" tabindex="0" aria-label="Start ${this.escapeHtml(r.name)} routine">
                 <div class="badge badge-lime font-game">${badgeLabel}</div>
-                <div class="scenario-card-title mt-8">${r.name}</div>
-                <p class="scenario-card-desc">${r.description}</p>
+                <div class="scenario-card-title mt-8">${this.escapeHtml(r.name)}</div>
+                <p class="scenario-card-desc">${this.escapeHtml(r.description)}</p>
                 <div class="text-dim text-sm mt-8" style="font-size:0.8rem; color:var(--text-dim);">
                   <strong>Opener:</strong> Static Flicks (Stationary)
                 </div>
@@ -655,7 +671,7 @@ export class UIManager {
                   return `
                     <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);">
                       <div>
-                        <div style="font-weight:600; font-size:0.95rem;">${scen?.name ?? pb.scenarioId}</div>
+                        <div style="font-weight:600; font-size:0.95rem;">${this.escapeHtml(scen?.name ?? pb.scenarioId)}</div>
                         <div class="text-dim text-sm">${pb.accuracy.toFixed(0)}% acc &bull; ${pb.avgReactionMs}ms reaction</div>
                       </div>
                       <div class="font-game font-bold text-gold" style="font-size:1.4rem;">${pb.score.toLocaleString()}</div>
@@ -677,7 +693,7 @@ export class UIManager {
                 ${recent.map(s => `
                   <div style="display:flex; justify-content:space-between; align-items:center; padding:8px 0; border-bottom:1px solid var(--border);">
                     <div>
-                      <div style="font-weight:600; font-size:0.95rem;">${s.scenarioName}</div>
+                      <div style="font-weight:600; font-size:0.95rem;">${this.escapeHtml(s.scenarioName)}</div>
                       <div class="text-dim text-sm">${s.accuracy.toFixed(0)}% accuracy &bull; ${s.hits} hits</div>
                     </div>
                     <div class="font-game font-bold text-lime" style="font-size:1.3rem;">${s.score.toLocaleString()}</div>
@@ -828,15 +844,15 @@ export class UIManager {
                                       : `<span class="badge" style="background:rgba(255,70,85,0.15); color:#ff4655; border:1px solid rgba(255,70,85,0.3);">TACTICAL STRAFE</span>`;
 
             return `
-              <div class="card scenario-card" data-scen="${s.id}" role="button" tabindex="0" aria-label="Play ${s.name} scenario">
+              <div class="card scenario-card" data-scen="${s.id}" role="button" tabindex="0" aria-label="Play ${this.escapeHtml(s.name)} scenario">
                 <div class="scenario-card-meta">
                   <span class="badge badge-red">${s.category}</span>
                   ${behaviorBadge}
                   <span class="badge badge-lime">${s.difficulty}</span>
                   <span class="badge badge-gold">${s.durationSec}s</span>
                 </div>
-                <div class="scenario-card-title">${s.name}</div>
-                <p class="scenario-card-desc">${s.description}</p>
+                <div class="scenario-card-title">${this.escapeHtml(s.name)}</div>
+                <p class="scenario-card-desc">${this.escapeHtml(s.description)}</p>
                 <div class="text-dim text-sm mb-8"><strong>Skill:</strong> ${s.skill}</div>
                 <div class="scenario-card-pb">
                   <span class="pb-label">Personal Best</span>
@@ -971,11 +987,7 @@ export class UIManager {
   }
 
   private escapeHtml(text: string): string {
-    return (text || '')
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+    return escapeHtml(text);
   }
 
   private renderPlansHTML(): string {
@@ -1037,7 +1049,7 @@ export class UIManager {
                       <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:12px;">
                         ${p.entries.map((entry) => {
                           const sc = getScenarioById(entry.scenarioId);
-                          return `<span class="badge badge-lime">${sc?.name ?? entry.scenarioId} <span style="opacity:0.75;">(${entry.durationSec}s)</span></span>`;
+                          return `<span class="badge badge-lime">${this.escapeHtml(sc?.name ?? entry.scenarioId)} <span style="opacity:0.75;">(${entry.durationSec}s)</span></span>`;
                         }).join('')}
                       </div>
                     </div>
@@ -1090,8 +1102,8 @@ export class UIManager {
                         <span class="badge badge-gold font-game">PRESET ROUTINE</span>
                         <span class="badge badge-lime font-game">${badgeLabel}</span>
                       </div>
-                      <h3>${r.name}</h3>
-                      <p class="text-dim text-sm mt-8">${r.description}</p>
+                      <h3>${this.escapeHtml(r.name)}</h3>
+                      <p class="text-dim text-sm mt-8">${this.escapeHtml(r.description)}</p>
                       <div class="text-dim text-sm mt-8" style="font-size:0.85rem;">
                         <em>Drill 1 opener: <strong>Static Flicks</strong> (stationary target calibration)</em>
                       </div>
@@ -1099,7 +1111,7 @@ export class UIManager {
                         ${r.scenarioIds.map((sid, idx) => {
                           const sc = getScenarioById(sid);
                           const isOpener = idx === 0 && sid === 'flick-static';
-                          return `<span class="badge ${isOpener ? 'badge-lime' : 'badge-gold'}">${sc?.name ?? sid}${isOpener ? ' (Stationary)' : ''}</span>`;
+                          return `<span class="badge ${isOpener ? 'badge-lime' : 'badge-gold'}">${this.escapeHtml(sc?.name ?? sid)}${isOpener ? ' (Stationary)' : ''}</span>`;
                         }).join('')}
                       </div>
                     </div>
@@ -1264,7 +1276,7 @@ export class UIManager {
                     <div style="display:flex; align-items:center; gap:10px; flex:1; min-width:180px;">
                       <div class="badge badge-gold font-game" style="font-size:0.85rem; padding:4px 8px;">#${idx + 1}</div>
                       <div>
-                        <div style="font-weight:600; font-size:0.95rem;">${sc?.name ?? entry.scenarioId}</div>
+                        <div style="font-weight:600; font-size:0.95rem;">${this.escapeHtml(sc?.name ?? entry.scenarioId)}</div>
                         <div style="display:flex; gap:6px; align-items:center; margin-top:4px;">
                           <span class="badge badge-lime" style="font-size:0.7rem; padding:1px 6px;">${sc?.category ?? 'drill'}</span>
                           ${!sc ? '<span class="badge badge-red" style="font-size:0.7rem; padding:1px 6px;">Missing ID</span>' : ''}
@@ -1342,7 +1354,7 @@ export class UIManager {
                 <div class="card" style="padding:10px 14px; display:flex; justify-content:space-between; align-items:center; gap:12px;">
                   <div style="flex:1; min-width:180px;">
                     <div style="display:flex; align-items:center; gap:8px;">
-                      <strong style="font-size:0.95rem;">${sc.name}</strong>
+                      <strong style="font-size:0.95rem;">${this.escapeHtml(sc.name)}</strong>
                       <span class="badge badge-teal" style="font-size:0.68rem; padding:1px 5px;">${sc.category}</span>
                     </div>
                     <div class="text-dim text-xs" style="margin-top:2px; line-height:1.3;">${sc.skill} &bull; ${sc.durationSec}s</div>
@@ -1640,7 +1652,7 @@ export class UIManager {
       return `
         <div style="background:var(--panel-2); border:1px dashed var(--border-2); border-radius:var(--r-md); padding:20px; text-align:center;">
           <div class="text-dim text-sm" style="margin-bottom:6px;">
-            ⚠️ Insufficient history for <strong>${sc?.name ?? scenarioId}</strong> ${diff !== 'all' ? `(${diff.toUpperCase()})` : '(All Difficulties)'}
+            ⚠️ Insufficient history for <strong>${this.escapeHtml(sc?.name ?? scenarioId)}</strong> ${diff !== 'all' ? `(${diff.toUpperCase()})` : '(All Difficulties)'}
           </div>
           <p style="font-size:0.9rem; margin:0; color:var(--text-dim);">
             At least 2 sessions with this scenario and difficulty scope are required to calculate performance trends. (Current recorded: <strong>${trend.sampleCount}</strong>)
@@ -1686,7 +1698,7 @@ export class UIManager {
         <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:16px; margin-bottom:16px;">
           <div>
             <div style="display:flex; align-items:center; gap:8px;">
-              <h4 style="margin:0; font-size:1.15rem; color:var(--text);">${sc?.name ?? scenarioId}</h4>
+              <h4 style="margin:0; font-size:1.15rem; color:var(--text);">${this.escapeHtml(sc?.name ?? scenarioId)}</h4>
               ${scopeBadge}
             </div>
             <span class="text-dim text-sm">Latest Attempt vs. Previous Attempt &bull; ${trend.sampleCount} total records</span>
@@ -1769,8 +1781,8 @@ export class UIManager {
       <div style="background:var(--panel-2); border:1px solid var(--border); border-radius:var(--r-md); padding:14px 16px;">
         <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
           <div>
-            <span style="font-weight:700; color:var(--text); font-size:0.95rem;">${dim.name}</span>
-            <span style="font-size:0.8rem; color:var(--text-dim); margin-left:8px;">${dim.description}</span>
+            <span style="font-weight:700; color:var(--text); font-size:0.95rem;">${this.escapeHtml(dim.name)}</span>
+            <span style="font-size:0.8rem; color:var(--text-dim); margin-left:8px;">${this.escapeHtml(dim.description)}</span>
           </div>
           <div style="display:flex; align-items:center; gap:10px;">
             <span style="font-size:0.82rem; color:var(--text-dim);">Benchmark: <strong>${dim.benchmark}</strong></span>
@@ -1795,16 +1807,16 @@ export class UIManager {
     const badgeType = rec.isColdStart
       ? `<span class="badge badge-gold font-game">DIAGNOSTIC BASELINE</span>`
       : (rec.primaryDimension
-        ? `<span class="badge badge-red font-game">DEFICIT FOCUS: ${rec.dimensionName ? rec.dimensionName.toUpperCase() : 'TARGETED'}</span>`
+        ? `<span class="badge badge-red font-game">DEFICIT FOCUS: ${rec.dimensionName ? this.escapeHtml(rec.dimensionName.toUpperCase()) : 'TARGETED'}</span>`
         : `<span class="badge badge-lime font-game">MAINTENANCE & PROGRESSION</span>`);
 
     const actionBtnText = rec.recommendationType === 'routine'
       ? `⚡ LAUNCH 5-MIN DIAGNOSTIC ROUTINE`
-      : `⚡ LAUNCH ${rec.recommendedScenarioName ? rec.recommendedScenarioName.toUpperCase() : 'RECOMMENDED DRILL'}`;
+      : `⚡ LAUNCH ${rec.recommendedScenarioName ? this.escapeHtml(rec.recommendedScenarioName.toUpperCase()) : 'RECOMMENDED DRILL'}`;
 
     const targetLabel = rec.recommendationType === 'routine'
-      ? `Routine: <strong>${rec.recommendedRoutineName || 'Diagnostic Routine'}</strong>`
-      : `Scenario: <strong>${rec.recommendedScenarioName || 'Target Drill'}</strong>`;
+      ? `Routine: <strong>${this.escapeHtml(rec.recommendedRoutineName || 'Diagnostic Routine')}</strong>`
+      : `Scenario: <strong>${this.escapeHtml(rec.recommendedScenarioName || 'Target Drill')}</strong>`;
 
     const coveragePct = Math.round(rec.confidence * 100);
 
@@ -1827,7 +1839,7 @@ export class UIManager {
         <div style="background:var(--bg-2); border-left:4px solid ${rec.isColdStart ? 'var(--gold)' : (rec.primaryDimension ? 'var(--status-danger)' : 'var(--lime-primary)')}; border-radius:0 var(--r-md) var(--r-md) 0; padding:16px 20px; margin-bottom:24px;">
           <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px; flex-wrap:wrap; gap:10px;">
             <div>
-              <h4 style="font-size:1.25rem; color:var(--text); margin-bottom:4px; font-family:var(--font-game);">${rec.title}</h4>
+              <h4 style="font-size:1.25rem; color:var(--text); margin-bottom:4px; font-family:var(--font-game);">${this.escapeHtml(rec.title)}</h4>
               <div style="font-size:0.88rem; color:var(--text-dim);">
                 ${targetLabel}
                 <span style="margin:0 8px; color:var(--border-2);">|</span>
@@ -2005,7 +2017,7 @@ export class UIManager {
             </div>
             <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
               <select id="trend-scenario-select" class="form-select" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:6px 12px; font-size:0.85rem;">
-                ${SCENARIOS.map(s => `<option value="${s.id}" ${this.selectedTrendScenario === s.id ? 'selected' : ''}>${s.name}</option>`).join('')}
+                ${SCENARIOS.map(s => `<option value="${s.id}" ${this.selectedTrendScenario === s.id ? 'selected' : ''}>${this.escapeHtml(s.name)}</option>`).join('')}
               </select>
               <select id="trend-diff-select" class="form-select" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:6px 12px; font-size:0.85rem;">
                 <option value="all" ${this.selectedTrendDifficulty === 'all' ? 'selected' : ''}>All Difficulties</option>
@@ -2047,7 +2059,7 @@ export class UIManager {
                     const isReliable = b.playCount >= 2;
                     return `
                       <tr style="border-bottom:1px solid var(--border);">
-                        <td style="padding:12px 10px; font-weight:600;">${b.scenarioName}</td>
+                        <td style="padding:12px 10px; font-weight:600;">${this.escapeHtml(b.scenarioName)}</td>
                         <td style="padding:12px 10px;"><span class="badge badge-teal">${b.category.toUpperCase()}</span></td>
                         <td style="padding:12px 10px; font-weight:700; color:var(--gold); font-family:var(--font-game); font-size:1.15rem;">${b.bestScore.toLocaleString()}</td>
                         <td style="padding:12px 10px; font-weight:600; color:var(--text); font-family:var(--font-game);">${avg.toLocaleString()}</td>
@@ -2087,7 +2099,7 @@ export class UIManager {
                     const isReactionMeaningful = sc ? sc.meaningfulReactionTime : true;
                     return `
                       <tr style="border-bottom:1px solid var(--border);">
-                        <td style="padding:12px 10px; font-weight:600;">${sc?.name ?? pb.scenarioId}</td>
+                        <td style="padding:12px 10px; font-weight:600;">${this.escapeHtml(sc?.name ?? pb.scenarioId)}</td>
                         <td style="padding:12px 10px; font-weight:700; color:var(--gold); font-family:var(--font-game); font-size:1.15rem;">${pb.score.toLocaleString()}</td>
                         <td style="padding:12px 10px; color:var(--teal); font-weight:600;">${pb.accuracy.toFixed(1)}%</td>
                         <td style="padding:12px 10px;">${isReactionMeaningful && pb.avgReactionMs > 0 ? `${pb.avgReactionMs} ms` : 'N/A'}</td>
@@ -2138,7 +2150,7 @@ export class UIManager {
 
                     return `
                       <tr style="border-bottom:1px solid var(--border);">
-                        <td style="padding:12px 10px; font-weight:600;">${r.routineName}</td>
+                        <td style="padding:12px 10px; font-weight:600;">${this.escapeHtml(r.routineName)}</td>
                         <td style="padding:12px 10px;"><span class="badge badge-red">${r.difficulty.toUpperCase()}</span></td>
                         <td style="padding:12px 10px;"><span class="badge badge-teal">${r.drillsCompleted}/${r.totalDrills}</span></td>
                         <td style="padding:12px 10px; color:var(--teal); font-weight:600;">${activeMin}m ${activeRemSec.toString().padStart(2, '0')}s</td>
@@ -2264,7 +2276,7 @@ export class UIManager {
 
                       return `
                         <tr style="border-bottom:1px solid var(--border);">
-                          <td style="padding:12px 10px; font-weight:600;">${s.scenarioName}</td>
+                          <td style="padding:12px 10px; font-weight:600;">${this.escapeHtml(s.scenarioName)}</td>
                           <td style="padding:12px 10px;"><span class="badge badge-red">${s.difficulty ? s.difficulty.toUpperCase() : 'INTERMEDIATE'}</span></td>
                           <td style="padding:12px 10px; font-weight:700; color:var(--text); font-family:var(--font-game); font-size:1.1rem;">${s.score.toLocaleString()}</td>
                           <td style="padding:12px 10px; color:var(--teal); font-weight:600;">${s.accuracy.toFixed(1)}%</td>
@@ -2529,545 +2541,16 @@ export class UIManager {
   }
 
   private renderSettingsHTML(): string {
-    const s = this.engine.settings.getAll();
-    const profiles = getAllSoundProfiles();
-    const activeProfile = getSoundProfile(s.soundProfile);
-    const isAudioReady = this.engine.audio.isReady();
-
-    return `
-      <div class="page-inner" style="max-width:960px;">
-        <div class="section-header">
-          <h2>SETTINGS & CALIBRATION</h2>
-          <span class="section-sub">Configure mouse look, field of view, audio profiles, and visual ergonomics</span>
-        </div>
-
-        <!-- Mouse Settings -->
-        <div class="card settings-section">
-          <div class="settings-section-title">MOUSE & SENSITIVITY</div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Sensitivity</div>
-              <div class="settings-row-desc">Calibrated for Valorant (e.g. 0.35 at 800 DPI &approx; 0.12 scale)</div>
-            </div>
-            <div class="settings-row-control">
-              <div class="range-row">
-                <input type="range" id="set-sens" min="0.01" max="1.0" step="0.01" value="${s.sensitivity}">
-                <span class="range-value" id="val-sens">${s.sensitivity.toFixed(2)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Invert Y Axis</div>
-              <div class="settings-row-desc">Reverse vertical pitch aiming direction</div>
-            </div>
-            <div class="settings-row-control">
-              <label class="toggle">
-                <input type="checkbox" id="set-invert-y" ${s.invertY ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Visuals & FOV -->
-        <div class="card settings-section">
-          <div class="settings-section-title">FIELD OF VIEW & VISUALS</div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Field of View (Horizontal)</div>
-              <div class="settings-row-desc">Valorant standard is 103&deg; horizontal FOV</div>
-            </div>
-            <div class="settings-row-control">
-              <div class="range-row">
-                <input type="range" id="set-fov" min="70" max="120" step="1" value="${s.fov}">
-                <span class="range-value" id="val-fov">${s.fov}&deg;</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Flash Intensity</div>
-              <div class="settings-row-desc">Controls max brightness and whiteout during flash training</div>
-            </div>
-            <div class="settings-row-control">
-              <div class="range-row">
-                <input type="range" id="set-flash" min="0.1" max="1.0" step="0.05" value="${s.flashIntensity}">
-                <span class="range-value" id="val-flash">${Math.round(s.flashIntensity * 100)}%</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Show Real-Time FPS</div>
-              <div class="settings-row-desc">Display frame rate counter on HUD</div>
-            </div>
-            <div class="settings-row-control">
-              <label class="toggle">
-                <input type="checkbox" id="set-show-fps" ${s.showFps ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-        </div>
-
-        <!-- Crosshair Settings with Live Preview -->
-        <div class="card settings-section">
-          <div class="settings-section-title">CROSSHAIR ERGONOMICS</div>
-
-          <div style="display:flex; gap:32px; align-items:flex-start; flex-wrap:wrap;">
-            <div style="flex:1; min-width:280px;">
-              <div class="settings-row">
-                <div class="settings-row-info">
-                  <div class="settings-row-label">Color Preset</div>
-                </div>
-                <div class="settings-row-control" style="display:flex; gap:6px;">
-                  <button class="btn btn-sm btn-secondary ch-color-btn" data-color="#00ff78" style="color:#00ff78;">Green</button>
-                  <button class="btn btn-sm btn-secondary ch-color-btn" data-color="#00ffff" style="color:#00ffff;">Cyan</button>
-                  <button class="btn btn-sm btn-secondary ch-color-btn" data-color="#ffff00" style="color:#ffff00;">Yellow</button>
-                  <button class="btn btn-sm btn-secondary ch-color-btn" data-color="#ffffff" style="color:#ffffff;">White</button>
-                  <button class="btn btn-sm btn-secondary ch-color-btn" data-color="#ff4655" style="color:#ff4655;">Red</button>
-                </div>
-              </div>
-
-              <div class="settings-row">
-                <div class="settings-row-info">
-                  <div class="settings-row-label">Crosshair Size (Length)</div>
-                </div>
-                <div class="settings-row-control">
-                  <div class="range-row">
-                    <input type="range" id="set-ch-size" min="3" max="24" step="1" value="${s.crosshairSize}">
-                    <span class="range-value" id="val-ch-size">${s.crosshairSize}px</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-row">
-                <div class="settings-row-info">
-                  <div class="settings-row-label">Inner Offset / Gap</div>
-                </div>
-                <div class="settings-row-control">
-                  <div class="range-row">
-                    <input type="range" id="set-ch-gap" min="1" max="16" step="1" value="${s.crosshairGap}">
-                    <span class="range-value" id="val-ch-gap">${s.crosshairGap}px</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-row">
-                <div class="settings-row-info">
-                  <div class="settings-row-label">Line Thickness</div>
-                </div>
-                <div class="settings-row-control">
-                  <div class="range-row">
-                    <input type="range" id="set-ch-thick" min="1" max="6" step="1" value="${s.crosshairThickness}">
-                    <span class="range-value" id="val-ch-thick">${s.crosshairThickness}px</span>
-                  </div>
-                </div>
-              </div>
-
-              <div class="settings-row">
-                <div class="settings-row-info">
-                  <div class="settings-row-label">Center Dot</div>
-                </div>
-                <div class="settings-row-control">
-                  <label class="toggle">
-                    <input type="checkbox" id="set-ch-dot" ${s.crosshairDot ? 'checked' : ''}>
-                    <span class="toggle-slider"></span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            <!-- Interactive Preview Box -->
-            <div style="display:flex; flex-direction:column; align-items:center; gap:8px;">
-              <div class="ch-preview-box" id="ch-preview">
-                <div class="crosshair" id="ch-preview-inner">
-                  <div class="crosshair-line ch-h ch-left"></div>
-                  <div class="crosshair-line ch-h ch-right"></div>
-                  <div class="crosshair-line ch-v ch-top"></div>
-                  <div class="crosshair-line ch-v ch-bottom"></div>
-                  <div class="ch-dot" id="ch-preview-dot" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); border-radius:50%;"></div>
-                </div>
-              </div>
-              <span class="text-dim text-sm">Live Preview</span>
-            </div>
-          </div>
-        </div>
-
-        <!-- Audio & Vandal Sound Profiles -->
-        <div class="card settings-section">
-          <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:16px;">
-            <div>
-              <div class="settings-section-title" style="margin-bottom:4px;">VANDAL SOUND PROFILES & KILL-STREAK AUDIO</div>
-              <span class="text-dim text-sm">Original procedural acoustic synthesis, custom weapon sound profiles, and kill-streak progression</span>
-            </div>
-            <div id="audio-status-badge">
-              ${isAudioReady
-                ? '<span class="badge badge-green">Web Audio: Active / Ready</span>'
-                : '<span class="badge badge-gold">Web Audio: Click Preview or Unmute to Activate</span>'}
-            </div>
-          </div>
-
-          <!-- Sound Profile Selection -->
-          <div class="settings-row" style="align-items:flex-start;">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Vandal Sound Profile</div>
-              <div class="settings-row-desc">Select an original procedural acoustic profile for firing, hits, and eliminations</div>
-            </div>
-            <div class="settings-row-control" style="max-width:320px; width:100%;">
-              <select id="set-sound-profile" class="form-select" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:8px 12px; width:100%; font-size:0.9rem;">
-                ${profiles.map(p => `
-                  <option value="${p.id}" ${s.soundProfile === p.id ? 'selected' : ''}>${p.name}</option>
-                `).join('')}
-              </select>
-            </div>
-          </div>
-
-          <!-- Profile Details Card -->
-          <div id="audio-profile-card" style="background:var(--panel-2); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:16px; margin:16px 0;">
-            <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px;">
-              <span class="badge badge-lime font-game" id="profile-badge">${activeProfile.badgeLabel}</span>
-              <span class="text-dim text-xs font-mono" id="profile-id-tag">ID: ${activeProfile.id}</span>
-            </div>
-            <div style="font-weight:700; font-size:1.05rem; color:var(--text); margin-bottom:4px;" id="profile-title">${activeProfile.name}</div>
-            <p style="margin:0 0 8px; font-size:0.88rem; color:var(--text-dim); line-height:1.5;" id="profile-desc">${activeProfile.shortDescription}</p>
-            <div style="font-size:0.78rem; color:var(--text-dim); border-top:1px dashed var(--border); padding-top:8px; font-style:italic;" id="profile-disclaimer">
-              ${activeProfile.designNotes}
-            </div>
-          </div>
-
-          <!-- Sound Previews (Non-mutating) -->
-          <div class="settings-row" style="align-items:flex-start;">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Acoustic Previews</div>
-              <div class="settings-row-desc">Test weapon audio without starting a drill or modifying live kill streaks</div>
-            </div>
-            <div class="settings-row-control" style="display:flex; flex-direction:column; gap:10px;">
-              <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-prev-fire">🔊 PREVIEW FIRING</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-prev-hit">🎯 PREVIEW BODY HIT</button>
-                <button type="button" class="btn btn-secondary btn-sm" id="btn-prev-head">💥 PREVIEW HEADSHOT</button>
-              </div>
-              <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
-                <select id="select-prev-stage" class="form-select" style="background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:6px 10px; font-size:0.85rem;">
-                  <option value="1">Stage 1 (1 Kill)</option>
-                  <option value="2">Stage 2 (2 Kills)</option>
-                  <option value="3">Stage 3 (3 Kills)</option>
-                  <option value="4">Stage 4 (4 Kills)</option>
-                  <option value="5" selected>Stage 5+ (Ace / 5+ Kills)</option>
-                </select>
-                <button type="button" class="btn btn-primary btn-sm" id="btn-prev-kill">⭐ PREVIEW KILL STREAK</button>
-              </div>
-            </div>
-          </div>
-
-          <!-- Master Volume Slider -->
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Master Volume</div>
-              <div class="settings-row-desc">Master output gain across all audio channels</div>
-            </div>
-            <div class="settings-row-control">
-              <div class="range-row">
-                <input type="range" id="set-vol" min="0" max="1.0" step="0.05" value="${s.volume}">
-                <span class="range-value" id="val-vol">${Math.round(s.volume * 100)}%</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- SFX Volume Slider -->
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Sound Effects (SFX) Volume</div>
-              <div class="settings-row-desc">Volume of gunshots, hit indicators, and kill-streak cues</div>
-            </div>
-            <div class="settings-row-control">
-              <div class="range-row">
-                <input type="range" id="set-sfx-vol" min="0" max="1.0" step="0.05" value="${s.sfxVolume ?? 0.8}">
-                <span class="range-value" id="val-sfx-vol">${Math.round((s.sfxVolume ?? 0.8) * 100)}%</span>
-              </div>
-            </div>
-          </div>
-
-          <!-- Mute Toggle -->
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Mute All Audio</div>
-              <div class="settings-row-desc">Instantly silence all weapon firing, hit sounds, and cues</div>
-            </div>
-            <div class="settings-row-control">
-              <label class="toggle">
-                <input type="checkbox" id="set-audio-mute" ${s.audioMuted ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Kill-Streak Progression Audio Toggle -->
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Kill-Streak Audio Progression</div>
-              <div class="settings-row-desc">Play escalating harmonic chords as consecutive kills climb from Stage 1 to 5+</div>
-            </div>
-            <div class="settings-row-control">
-              <label class="toggle">
-                <input type="checkbox" id="set-streak-audio" ${s.killStreakAudioEnabled !== false ? 'checked' : ''}>
-                <span class="toggle-slider"></span>
-              </label>
-            </div>
-          </div>
-
-          <!-- Restore Audio Defaults Action -->
-          <div style="display:flex; justify-content:flex-end; margin-top:16px;">
-            <button type="button" class="btn btn-secondary btn-sm" id="btn-reset-audio">RESTORE AUDIO DEFAULTS</button>
-          </div>
-        </div>
-
-        <!-- Storage & Local-First Database (Phase 3) -->
-        <div class="card settings-section">
-          <div class="settings-section-title">STORAGE & BACKUP (LOCAL-FIRST)</div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Database Engine</div>
-              <div class="settings-row-desc">WarmupLab uses local IndexedDB (Dexie.js) with zero cloud dependencies</div>
-            </div>
-            <div class="settings-row-control">
-              <span class="badge ${this.engine.store.isFallback() ? 'badge-yellow' : 'badge-lime'} font-game" id="db-status-badge">
-                ${this.engine.store.isFallback() ? 'LOCALSTORAGE FALLBACK' : 'INDEXEDDB (ACTIVE)'}
-              </span>
-            </div>
-          </div>
-
-          <div class="settings-row">
-            <div class="settings-row-info">
-              <div class="settings-row-label">Full Workspace Backup</div>
-              <div class="settings-row-desc">Export or restore all sessions, personal bests, routine stats, and custom playlists</div>
-            </div>
-            <div class="settings-row-control" style="display:flex; gap:8px; flex-wrap:wrap;">
-              <button type="button" class="btn btn-secondary btn-sm" id="btn-export-backup">💾 EXPORT FULL BACKUP (.JSON)</button>
-              <button type="button" class="btn btn-secondary btn-sm" id="btn-import-backup">📂 RESTORE BACKUP</button>
-              <input type="file" id="input-import-backup" accept=".json" style="display:none;">
-            </div>
-          </div>
-        </div>
-
-        <!-- Reset Button -->
-        <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
-          <button class="btn btn-secondary" id="btn-reset-settings">RESET ALL SETTINGS TO DEFAULTS</button>
-        </div>
-      </div>
-    `;
+    return renderSettingsViewHTML(this.engine, this.escapeHtml.bind(this));
   }
 
   private attachSettingsListeners(container: HTMLElement): void {
-    const bindRange = (
-      sliderId: string,
-      labelId: string,
-      suffix: string,
-      setter: (v: number) => void
-    ) => {
-      const slider = container.querySelector(`#${sliderId}`) as HTMLInputElement;
-      const label = container.querySelector(`#${labelId}`);
-      slider?.addEventListener('input', () => {
-        const val = parseFloat(slider.value);
-        if (label) label.textContent = `${val}${suffix}`;
-        setter(val);
-        this.engine.applySettings();
-      });
-    };
-
-    bindRange('set-sens', 'val-sens', '', v => this.engine.settings.set('sensitivity', v));
-    bindRange('set-fov', 'val-fov', '°', v => this.engine.settings.set('fov', v));
-    bindRange('set-flash', 'val-flash', '%', v => this.engine.settings.set('flashIntensity', v));
-    bindRange('set-vol', 'val-vol', '%', v => this.engine.settings.set('volume', v));
-    bindRange('set-sfx-vol', 'val-sfx-vol', '%', v => this.engine.settings.set('sfxVolume', v));
-
-    // Sound Profile Selector
-    const profileSelect = container.querySelector('#set-sound-profile') as HTMLSelectElement | null;
-    profileSelect?.addEventListener('change', () => {
-      const pid = profileSelect.value as SoundProfileId;
-      this.engine.settings.set('soundProfile', pid);
-      this.engine.applySettings();
-
-      const p = getSoundProfile(pid);
-      const badge = container.querySelector('#profile-badge');
-      const idTag = container.querySelector('#profile-id-tag');
-      const title = container.querySelector('#profile-title');
-      const desc = container.querySelector('#profile-desc');
-      const disc = container.querySelector('#profile-disclaimer');
-
-      if (badge) badge.textContent = p.badgeLabel;
-      if (idTag) idTag.textContent = `ID: ${p.id}`;
-      if (title) title.textContent = p.name;
-      if (desc) desc.textContent = p.shortDescription;
-      if (disc) disc.textContent = p.designNotes;
+    attachSettingsViewListeners(container, this.engine, {
+      showToast: this.showToast.bind(this),
+      renderPage: this.renderPage.bind(this),
+      applyCrosshairStyles: this.applyCrosshairStyles.bind(this),
+      fpsEl: this.fpsEl,
     });
-
-    // Sound Previews (safe, non-mutating)
-    const updateAudioStatusBadge = () => {
-      const badgeContainer = container.querySelector('#audio-status-badge');
-      if (badgeContainer) {
-        badgeContainer.innerHTML = '<span class="badge badge-green">Web Audio: Active / Ready</span>';
-      }
-    };
-
-    container.querySelector('#btn-prev-fire')?.addEventListener('click', () => {
-      const pid = (profileSelect?.value as SoundProfileId) || this.engine.settings.get('soundProfile');
-      this.engine.audio.previewGunshot(pid);
-      updateAudioStatusBadge();
-    });
-
-    container.querySelector('#btn-prev-hit')?.addEventListener('click', () => {
-      const pid = (profileSelect?.value as SoundProfileId) || this.engine.settings.get('soundProfile');
-      this.engine.audio.previewHit(pid, false);
-      updateAudioStatusBadge();
-    });
-
-    container.querySelector('#btn-prev-head')?.addEventListener('click', () => {
-      const pid = (profileSelect?.value as SoundProfileId) || this.engine.settings.get('soundProfile');
-      this.engine.audio.previewHit(pid, true);
-      updateAudioStatusBadge();
-    });
-
-    container.querySelector('#btn-prev-kill')?.addEventListener('click', () => {
-      const pid = (profileSelect?.value as SoundProfileId) || this.engine.settings.get('soundProfile');
-      const stageSelect = container.querySelector('#select-prev-stage') as HTMLSelectElement | null;
-      const stage = stageSelect ? parseInt(stageSelect.value, 10) : 1;
-      this.engine.audio.previewKill(pid, stage);
-      updateAudioStatusBadge();
-    });
-
-    // Audio checkboxes
-    container.querySelector('#set-audio-mute')?.addEventListener('change', e => {
-      const checked = (e.target as HTMLInputElement).checked;
-      this.engine.settings.set('audioMuted', checked);
-      this.engine.applySettings();
-    });
-
-    container.querySelector('#set-streak-audio')?.addEventListener('change', e => {
-      const checked = (e.target as HTMLInputElement).checked;
-      this.engine.settings.set('killStreakAudioEnabled', checked);
-      this.engine.applySettings();
-    });
-
-    // Audio reset defaults button
-    container.querySelector('#btn-reset-audio')?.addEventListener('click', () => {
-      this.engine.settings.resetAudio();
-      this.engine.applySettings();
-      this.renderPage('settings');
-      this.showToast('Vandal audio settings restored to default presets.', 'info');
-    });
-
-    // Crosshair sliders
-    bindRange('set-ch-size', 'val-ch-size', 'px', v => {
-      this.engine.settings.set('crosshairSize', v);
-      this.applyCrosshairStyles(this.engine.settings.getAll());
-    });
-    bindRange('set-ch-gap', 'val-ch-gap', 'px', v => {
-      this.engine.settings.set('crosshairGap', v);
-      this.applyCrosshairStyles(this.engine.settings.getAll());
-    });
-    bindRange('set-ch-thick', 'val-ch-thick', 'px', v => {
-      this.engine.settings.set('crosshairThickness', v);
-      this.applyCrosshairStyles(this.engine.settings.getAll());
-    });
-
-    // Checkboxes
-    container.querySelector('#set-invert-y')?.addEventListener('change', e => {
-      this.engine.settings.set('invertY', (e.target as HTMLInputElement).checked);
-      this.engine.applySettings();
-    });
-
-    container.querySelector('#set-show-fps')?.addEventListener('change', e => {
-      const checked = (e.target as HTMLInputElement).checked;
-      this.engine.settings.set('showFps', checked);
-      this.fpsEl.style.display = checked ? 'block' : 'none';
-    });
-
-    container.querySelector('#set-ch-dot')?.addEventListener('change', e => {
-      const checked = (e.target as HTMLInputElement).checked;
-      this.engine.settings.set('crosshairDot', checked);
-      this.applyCrosshairStyles(this.engine.settings.getAll());
-    });
-
-    // Color buttons
-    container.querySelectorAll('.ch-color-btn').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const color = (btn as HTMLElement).dataset.color;
-        if (color) {
-          this.engine.settings.set('crosshairColor', color);
-          this.applyCrosshairStyles(this.engine.settings.getAll());
-        }
-      });
-    });
-
-    // Full Backup Export (Phase 3)
-    container.querySelector('#btn-export-backup')?.addEventListener('click', () => {
-      const jsonStr = this.engine.store.exportBackupJSON();
-      const dateStr = new Date().toISOString().split('T')[0];
-      const filename = `warmuplab-full-backup-${dateStr}.json`;
-      try {
-        const blob = new Blob([jsonStr], { type: 'application/json' });
-        const url = typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function'
-          ? URL.createObjectURL(blob)
-          : 'data:application/json;charset=utf-8,' + encodeURIComponent(jsonStr);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = filename;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        if (typeof url === 'string' && url.startsWith('blob:') && typeof URL.revokeObjectURL === 'function') {
-          URL.revokeObjectURL(url);
-        }
-        this.showToast('Full workspace backup exported successfully!');
-      } catch (err: any) {
-        this.showToast(`Export failed: ${err?.message || 'Error'}`, 'error');
-      }
-    });
-
-    // Full Backup Import (Phase 3)
-    const backupFileInput = container.querySelector('#input-import-backup') as HTMLInputElement | null;
-    container.querySelector('#btn-import-backup')?.addEventListener('click', () => {
-      backupFileInput?.click();
-    });
-
-    backupFileInput?.addEventListener('change', () => {
-      const file = backupFileInput.files?.[0];
-      if (!file) return;
-
-      const reader = new FileReader();
-      reader.onload = async (e) => {
-        const content = typeof e.target?.result === 'string' ? e.target.result : '';
-        const res = await this.engine.store.importBackupJSON(content);
-        if (res.success) {
-          this.showToast(`Restored: ${res.sessionsImported} sessions, ${res.playlistsImported} playlists, ${res.routinesImported} routines!`);
-          this.renderPage('settings');
-        } else {
-          this.showToast(`Restore failed: ${res.errors.join(', ')}`, 'error');
-        }
-        backupFileInput.value = '';
-      };
-      reader.readAsText(file);
-    });
-
-    // Reset settings
-    container.querySelector('#btn-reset-settings')?.addEventListener('click', () => {
-      this.engine.settings.reset();
-      this.engine.applySettings();
-      this.applyCrosshairStyles(this.engine.settings.getAll());
-      this.renderPage('settings');
-      this.showToast('Settings restored to default presets.', 'info');
-    });
-
-    this.applyCrosshairStyles(this.engine.settings.getAll());
   }
 
   // ── Crosshair Styling ───────────────────────────────────────────────
@@ -3420,7 +2903,7 @@ export class UIManager {
 
       ${isInRoutine ? `
         <div style="background:rgba(204,255,0,0.08); border:1px solid var(--lime-primary); border-radius:var(--r-md); padding:8px 16px; margin-bottom:12px; display:flex; justify-content:space-between; align-items:center;">
-          <span style="font-family:var(--font-game); font-weight:700; color:var(--lime-primary);">ROUTINE: ${this.activeRoutine!.name.toUpperCase()}</span>
+          <span style="font-family:var(--font-game); font-weight:700; color:var(--lime-primary);">ROUTINE: ${this.escapeHtml(this.activeRoutine!.name.toUpperCase())}</span>
           <span class="badge badge-lime font-game">DRILL ${routineCurrentDrill} OF ${routineTotalDrills}</span>
         </div>
       ` : ''}
@@ -3430,7 +2913,7 @@ export class UIManager {
         <span class="badge badge-red font-game">${result.difficulty.toUpperCase()}</span>
         <span class="badge badge-gold font-game">${result.durationSec}s</span>
       </div>
-      <h2 style="font-size:2.2rem; margin:6px 0 20px;">${result.scenarioName}</h2>
+      <h2 style="font-size:2.2rem; margin:6px 0 20px;">${this.escapeHtml(result.scenarioName)}</h2>
 
       <!-- Primary Metrics Cards -->
       <div class="grid-4 mb-24">
@@ -3489,7 +2972,7 @@ export class UIManager {
       ${isInRoutine && nextDrillConfig ? `
         <div style="background:var(--panel-2); border-left:3px solid var(--lime-primary); padding:10px 16px; margin-bottom:20px; text-align:left; border-radius:0 var(--r-sm) var(--r-sm) 0;">
           <div class="text-dim text-sm" style="margin-bottom:2px;">NEXT DRILL:</div>
-          <div style="font-weight:700; color:var(--text);">${nextDrillConfig.name} <span class="badge badge-gold" style="margin-left:6px;">${nextDrillConfig.skill}</span></div>
+          <div style="font-weight:700; color:var(--text);">${this.escapeHtml(nextDrillConfig.name)} <span class="badge badge-gold" style="margin-left:6px;">${this.escapeHtml(nextDrillConfig.skill)}</span></div>
           <div id="routine-countdown-text" style="font-size:0.85rem; color:var(--lime-primary); margin-top:4px;">Starting next drill in 4s...</div>
         </div>
       ` : ''}
@@ -3498,17 +2981,17 @@ export class UIManager {
         <div class="card mb-20" style="background:var(--panel-2); border:1px solid var(--border-2); padding:16px; text-align:left; border-radius:var(--r-md);">
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; flex-wrap:wrap; gap:8px;">
             <div style="font-family:var(--font-game); font-weight:700; color:var(--lime-primary); font-size:1.1rem;">
-              🧠 NEXT TRAINING STEP: ${rec.recommendedScenarioName ? rec.recommendedScenarioName.toUpperCase() : (rec.recommendedRoutineName ? rec.recommendedRoutineName.toUpperCase() : rec.title.toUpperCase())}
+              🧠 NEXT TRAINING STEP: ${this.escapeHtml(rec.recommendedScenarioName ? rec.recommendedScenarioName.toUpperCase() : (rec.recommendedRoutineName ? rec.recommendedRoutineName.toUpperCase() : rec.title.toUpperCase()))}
             </div>
             <span class="badge ${rec.isColdStart ? 'badge-gold' : (rec.primaryDimension ? 'badge-red' : 'badge-lime')} font-game">
               ${rec.isColdStart ? 'DIAGNOSTIC BASELINE' : (rec.primaryDimension ? 'TARGETED FOCUS' : 'RECOMMENDED')}
             </span>
           </div>
           <div style="font-size:0.88rem; color:var(--text); margin-bottom:4px;">
-            <strong>Evidence:</strong> ${rec.evidence}
+            <strong>Evidence:</strong> ${this.escapeHtml(rec.evidence)}
           </div>
           <div style="font-size:0.84rem; color:var(--text-dim); margin-bottom:12px;">
-            ${rec.rationale}
+            ${this.escapeHtml(rec.rationale)}
           </div>
           <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">
             <div style="font-size:0.8rem; color:var(--text-dim);">
@@ -3694,7 +3177,7 @@ export class UIManager {
       </div>
 
       <div style="display:flex; justify-content:center; gap:8px; margin-bottom:12px; flex-wrap:wrap;">
-        <span class="badge badge-lime font-game">${routine.name.toUpperCase()}</span>
+        <span class="badge badge-lime font-game">${this.escapeHtml(routine.name.toUpperCase())}</span>
         <span class="badge badge-red font-game">${routine.difficulty.toUpperCase()}</span>
         <span class="badge badge-gold font-game">${completedDrillsCount}/${totalPlannedDrills} DRILLS FINISHED</span>
         ${skippedDrillsCount > 0 ? `<span class="badge badge-red font-game">${skippedDrillsCount} SKIPPED</span>` : ''}
@@ -3750,7 +3233,7 @@ export class UIManager {
             ${completedResults.map((res, idx) => `
               <tr style="border-bottom:1px solid var(--border);">
                 <td style="padding:6px; color:var(--text-dim);">${idx + 1}</td>
-                <td style="padding:6px; font-weight:600;">${res.scenarioName}</td>
+                <td style="padding:6px; font-weight:600;">${this.escapeHtml(res.scenarioName)}</td>
                 <td style="padding:6px; color:var(--text-dim);">${res.durationSec}s</td>
                 <td style="padding:6px; color:var(--gold); font-family:var(--font-game); font-weight:700;">${res.score.toLocaleString()}</td>
                 <td style="padding:6px; color:var(--teal);">${res.accuracy.toFixed(1)}%</td>

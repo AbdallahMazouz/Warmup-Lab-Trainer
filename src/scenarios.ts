@@ -1462,11 +1462,12 @@ export function getScenarioById(id: string): ScenarioConfig | undefined {
   return undefined;
 }
 
-export function getScenariosByCategory(category: string): ScenarioConfig[] {
-  if (category === 'all') return SCENARIOS;
-  if (category === 'aimlab') return SCENARIOS.filter(s => s.id.startsWith('aimlab-'));
-  if (category === 'kovaaks') return SCENARIOS.filter(s => s.id.startsWith('kovaaks-'));
-  return SCENARIOS.filter(s => s.category === category);
+export function getScenariosByCategory(category: string, customScenarios?: ScenarioConfig[]): ScenarioConfig[] {
+  const pool = customScenarios ? [...customScenarios, ...SCENARIOS] : SCENARIOS;
+  if (category === 'all') return pool;
+  if (category === 'aimlab') return pool.filter(s => s.id.startsWith('aimlab-'));
+  if (category === 'kovaaks') return pool.filter(s => s.id.startsWith('kovaaks-'));
+  return pool.filter(s => s.category === category);
 }
 
 export const ROUTINE_TRANSITION_SEC = 4;

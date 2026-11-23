@@ -64,6 +64,23 @@ export class SettingsManager {
     s.flashIntensity = (typeof s.flashIntensity === 'number' && Number.isFinite(s.flashIntensity))
       ? Math.max(0, Math.min(1.0, s.flashIntensity)) : DEFAULTS.flashIntensity;
 
+    // Crosshair numerical bounds
+    s.crosshairSize = (typeof s.crosshairSize === 'number' && Number.isFinite(s.crosshairSize))
+      ? Math.max(1, Math.min(30, Math.round(s.crosshairSize))) : DEFAULTS.crosshairSize;
+
+    s.crosshairGap = (typeof s.crosshairGap === 'number' && Number.isFinite(s.crosshairGap))
+      ? Math.max(0, Math.min(20, Math.round(s.crosshairGap))) : DEFAULTS.crosshairGap;
+
+    s.crosshairThickness = (typeof s.crosshairThickness === 'number' && Number.isFinite(s.crosshairThickness))
+      ? Math.max(1, Math.min(10, Math.round(s.crosshairThickness))) : DEFAULTS.crosshairThickness;
+
+    // Crosshair color (hex color validation)
+    if (typeof s.crosshairColor !== 'string' || !/^#(?:[0-9a-fA-F]{3}){1,2}$/.test(s.crosshairColor.trim())) {
+      s.crosshairColor = DEFAULTS.crosshairColor;
+    } else {
+      s.crosshairColor = s.crosshairColor.trim();
+    }
+
     // Booleans
     s.audioMuted = typeof s.audioMuted === 'boolean' ? s.audioMuted : DEFAULTS.audioMuted;
     s.killStreakAudioEnabled = typeof s.killStreakAudioEnabled === 'boolean'
@@ -71,6 +88,9 @@ export class SettingsManager {
     s.crosshairDot = typeof s.crosshairDot === 'boolean' ? s.crosshairDot : DEFAULTS.crosshairDot;
     s.showFps = typeof s.showFps === 'boolean' ? s.showFps : DEFAULTS.showFps;
     s.invertY = typeof s.invertY === 'boolean' ? s.invertY : DEFAULTS.invertY;
+    s.showHitNumbers = typeof s.showHitNumbers === 'boolean' ? s.showHitNumbers : DEFAULTS.showHitNumbers;
+    s.reducedEffects = typeof s.reducedEffects === 'boolean' ? s.reducedEffects : DEFAULTS.reducedEffects;
+    s.highContrast = typeof s.highContrast === 'boolean' ? s.highContrast : DEFAULTS.highContrast;
 
     // Profile ID
     if (!isValidSoundProfileId(s.soundProfile)) {
