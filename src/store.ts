@@ -1,8 +1,13 @@
 // =====================================================================
-// store.ts — Session history and personal bests (localStorage)
+// store.ts — Session history, personal bests & Dexie write-through cache
 // =====================================================================
 
-import { LS_SESSIONS, LS_PERSONAL_BESTS, LS_ROUTINES } from './constants';
+import {
+  LS_SESSIONS,
+  LS_PERSONAL_BESTS,
+  LS_ROUTINES,
+  LS_PLAYLISTS,
+} from './constants';
 import type {
   SessionResult,
   PersonalBest,
@@ -15,21 +20,112 @@ import type {
   ImportHistoryResult,
   FilterSessionsOptions,
   FilteredSessionsResult,
+  Playlist,
+  ScenarioConfig,
+  WarmupLabScenarioV1,
+  WarmupLabBackupV4,
+  BackupImportResult,
 } from './types';
-import { getScenarioById } from './scenarios';
+import { getScenarioById, SCENARIOS, TRAINING_ROUTINES, registerCustomScenarioResolver } from './scenarios';
+import { validatePlaylist, duplicatePlaylist as clonePlaylist, convertRoutineToPlaylist } from './playlist';
+import { validateCustomScenarioJSON, convertCustomScenarioToConfig } from './scenarioConfig';
+import { WarmupLabDatabase } from './db/database';
+import {
+  migrateFromLocalStorage,
+  sanitizeSession,
+  sanitizeRoutineSummary,
+} from './db/migration';
 
 const MAX_SESSIONS = 100;
 const MAX_ROUTINES = 20;
 
 export class Store {
-  private sessions: SessionResult[];
-  private pbs: Record<string, PersonalBest>;
-  private routineSummaries: RoutineSummary[];
+  private db: WarmupLabDatabase;
+  private sessions: SessionResult[] = [];
+  private pbs: Record<string, PersonalBest> = {};
+  private routineSummaries: RoutineSummary[] = [];
+  private playlists: Playlist[] = [];
+  private customScenarios: WarmupLabScenarioV1[] = [];
+  private isInitialized = false;
+  private isFallbackMode = false;
 
-  constructor() {
+  constructor(dbInstance?: WarmupLabDatabase) {
+    this.db = dbInstance || new WarmupLabDatabase();
+    // Register custom scenario resolver with global scenario lookup
+    registerCustomScenarioResolver((id: string) => this.getCustomScenarioConfig(id));
+    // Synchronously seed in-memory cache from localStorage so immediate calls before async init() work
     this.sessions = this.loadSessions();
     this.pbs = this.loadPBs();
     this.routineSummaries = this.loadRoutineSummaries();
+    this.playlists = this.loadPlaylists();
+  }
+
+  /**
+   * Asynchronously hydrates the in-memory cache from Dexie IndexedDB
+   * and runs safe migration if legacy localStorage records exist.
+   */
+  async init(): Promise<void> {
+    if (this.isInitialized) return;
+
+    try {
+      await this.db.open();
+      // Run safe, non-destructive migration if needed
+      await migrateFromLocalStorage(this.db);
+
+      // Hydrate in-memory cache from Dexie
+      const dbSessions = await this.db.sessions.orderBy('timestamp').reverse().toArray();
+      if (dbSessions.length > 0) {
+        this.sessions = dbSessions;
+      }
+
+      const dbPBs = await this.db.personalBests.toArray();
+      if (dbPBs.length > 0) {
+        for (const pb of dbPBs) {
+          this.pbs[pb.id] = {
+            scenarioId: pb.scenarioId,
+            difficulty: pb.difficulty,
+            score: pb.score,
+            accuracy: pb.accuracy,
+            avgReactionMs: pb.avgReactionMs,
+            timestamp: pb.timestamp,
+            configVersion: pb.configVersion,
+          };
+        }
+      }
+
+      const dbRoutines = await this.db.routineCompletions.orderBy('timestamp').reverse().toArray();
+      if (dbRoutines.length > 0) {
+        this.routineSummaries = dbRoutines;
+      }
+
+      const dbPlaylists = await this.db.playlists.toArray();
+      if (dbPlaylists.length > 0) {
+        this.playlists = dbPlaylists;
+      }
+
+      const dbCustom = await this.db.customScenarios.toArray();
+      if (dbCustom.length > 0) {
+        this.customScenarios = dbCustom;
+      }
+
+      this.isInitialized = true;
+    } catch (err) {
+      console.warn('[Store] Dexie initialization failed, falling back to localStorage cache:', err);
+      this.isFallbackMode = true;
+      this.isInitialized = true;
+    }
+  }
+
+  isReady(): boolean {
+    return this.isInitialized;
+  }
+
+  isFallback(): boolean {
+    return this.isFallbackMode;
+  }
+
+  getDatabase(): WarmupLabDatabase {
+    return this.db;
   }
 
   // ── Sessions ──────────────────────────────────────────────────────
@@ -43,7 +139,7 @@ export class Store {
       return { isPB: false };
     }
 
-    const sanitized = this.sanitizeSession(result);
+    const sanitized = sanitizeSession(result);
     if (!sanitized) {
       return { isPB: false };
     }
@@ -52,8 +148,40 @@ export class Store {
     if (this.sessions.length > MAX_SESSIONS) {
       this.sessions = this.sessions.slice(0, MAX_SESSIONS);
     }
+
+    // Save localStorage mirror (capped to prevent quota errors)
     this.saveSessions();
+
     const isPB = this.updatePB(sanitized);
+
+    // Background write-through to Dexie
+    if (!this.isFallbackMode) {
+      this.db.sessions.put(sanitized).catch(err => {
+        console.error('[Store] Failed to write session to Dexie:', err);
+      });
+
+      if (isPB) {
+        const overallPB = this.pbs[sanitized.scenarioId];
+        if (overallPB) {
+          this.db.personalBests.put({
+            id: sanitized.scenarioId,
+            ...overallPB,
+          }).catch(err => console.error('[Store] Failed to write overall PB to Dexie:', err));
+        }
+
+        if (sanitized.difficulty) {
+          const diffKey = `${sanitized.scenarioId}:${sanitized.difficulty}`;
+          const diffPB = this.pbs[diffKey];
+          if (diffPB) {
+            this.db.personalBests.put({
+              id: diffKey,
+              ...diffPB,
+            }).catch(err => console.error('[Store] Failed to write diff PB to Dexie:', err));
+          }
+        }
+      }
+    }
+
     return { isPB };
   }
 
@@ -67,7 +195,163 @@ export class Store {
     return this.sessions.slice(0, limit);
   }
 
-  // ── History Management & Diagnostics ───────────────────────────────
+  // ── Universal Backup & Restore (Phase 3 & Phase 4) ────────────────
+  exportBackupJSON(): string {
+    const backup: WarmupLabBackupV4 = {
+      format: 'warmuplab-backup',
+      version: 4,
+      exportedAt: new Date().toISOString(),
+      clientVersion: '1.2.0',
+      data: {
+        sessions: [...this.sessions],
+        personalBests: Object.values(this.pbs),
+        routineSummaries: [...this.routineSummaries],
+        playlists: [...this.playlists],
+        customScenarios: [...this.customScenarios],
+      },
+    };
+    return JSON.stringify(backup, null, 2);
+  }
+
+  async importBackupJSON(jsonStr: string): Promise<BackupImportResult> {
+    const errors: string[] = [];
+
+    if (typeof jsonStr !== 'string' || !jsonStr.trim()) {
+      return {
+        success: false,
+        sessionsImported: 0,
+        pbsImported: 0,
+        routinesImported: 0,
+        playlistsImported: 0,
+        customScenariosImported: 0,
+        settingsImported: false,
+        errors: ['Empty or invalid JSON string provided.'],
+      };
+    }
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch (err: any) {
+      return {
+        success: false,
+        sessionsImported: 0,
+        pbsImported: 0,
+        routinesImported: 0,
+        playlistsImported: 0,
+        customScenariosImported: 0,
+        settingsImported: false,
+        errors: [`JSON parse error: ${err?.message}`],
+      };
+    }
+
+    let rawSessions: any[] = [];
+    let rawRoutines: any[] = [];
+    let rawPlaylists: any[] = [];
+    let rawCustomScenarios: any[] = [];
+
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.format === 'warmuplab-backup' && parsed.data) {
+        rawSessions = Array.isArray(parsed.data.sessions) ? parsed.data.sessions : [];
+        rawRoutines = Array.isArray(parsed.data.routineSummaries) ? parsed.data.routineSummaries : [];
+        rawPlaylists = Array.isArray(parsed.data.playlists) ? parsed.data.playlists : [];
+        rawCustomScenarios = Array.isArray(parsed.data.customScenarios) ? parsed.data.customScenarios : [];
+      } else if (Array.isArray(parsed.sessions)) {
+        rawSessions = parsed.sessions;
+      } else if (Array.isArray(parsed)) {
+        rawSessions = parsed;
+      }
+    }
+
+    const validSessions: SessionResult[] = [];
+    for (const s of rawSessions) {
+      const clean = sanitizeSession(s);
+      if (clean && !this.sessions.some(existing => existing.id === clean.id)) {
+        validSessions.push(clean);
+        this.sessions.unshift(clean);
+        this.updatePB(clean);
+      }
+    }
+
+    const validPlaylists: Playlist[] = [];
+    for (const p of rawPlaylists) {
+      const val = validatePlaylist(p);
+      if (val.valid) {
+        const cleanP = p as Playlist;
+        validPlaylists.push(cleanP);
+        const idx = this.playlists.findIndex(existing => existing.id === cleanP.id);
+        if (idx !== -1) {
+          this.playlists[idx] = cleanP;
+        } else {
+          this.playlists.push(cleanP);
+        }
+      }
+    }
+
+    const validRoutines: RoutineSummary[] = [];
+    for (const r of rawRoutines) {
+      const cleanR = sanitizeRoutineSummary(r);
+      if (cleanR && !this.routineSummaries.some(existing => existing.id === cleanR.id)) {
+        validRoutines.push(cleanR);
+        this.routineSummaries.unshift(cleanR);
+      }
+    }
+
+    const validCustomScenarios: WarmupLabScenarioV1[] = [];
+    for (const sc of rawCustomScenarios) {
+      const val = validateCustomScenarioJSON(sc);
+      if (val.valid) {
+        const cleanSc = sc as WarmupLabScenarioV1;
+        validCustomScenarios.push(cleanSc);
+        const idx = this.customScenarios.findIndex(existing => existing.id === cleanSc.id);
+        if (idx !== -1) {
+          this.customScenarios[idx] = cleanSc;
+        } else {
+          this.customScenarios.push(cleanSc);
+        }
+      }
+    }
+
+    // Persist to Dexie
+    if (!this.isFallbackMode) {
+      try {
+        await this.db.transaction('rw', [
+          this.db.sessions,
+          this.db.personalBests,
+          this.db.routineCompletions,
+          this.db.playlists,
+          this.db.customScenarios,
+        ], async () => {
+          if (validSessions.length > 0) await this.db.sessions.bulkPut(validSessions);
+          if (validRoutines.length > 0) await this.db.routineCompletions.bulkPut(validRoutines);
+          if (validPlaylists.length > 0) await this.db.playlists.bulkPut(validPlaylists);
+          if (validCustomScenarios.length > 0) await this.db.customScenarios.bulkPut(validCustomScenarios);
+          const pbEntities = Object.entries(this.pbs).map(([id, pb]) => ({ id, ...pb }));
+          if (pbEntities.length > 0) await this.db.personalBests.bulkPut(pbEntities);
+        });
+      } catch (e: any) {
+        errors.push(`Database transaction warning: ${e?.message}`);
+      }
+    }
+
+    this.saveSessions();
+    this.savePBs();
+    this.saveRoutineSummaries();
+    this.savePlaylists();
+
+    return {
+      success: true,
+      sessionsImported: validSessions.length,
+      pbsImported: Object.keys(this.pbs).length,
+      routinesImported: validRoutines.length,
+      playlistsImported: validPlaylists.length,
+      customScenariosImported: validCustomScenarios.length,
+      settingsImported: false,
+      errors,
+    };
+  }
+
+  // ── History Management & Legacy Diagnostics ────────────────────────
   exportSessionsJSON(): string {
     const envelope: HistoryExportEnvelope = {
       version: 'vwt-history-v1',
@@ -104,15 +388,15 @@ export class Store {
         invalidCount: 0,
         totalBefore,
         totalAfter: totalBefore,
-        error: `JSON parse error: ${err?.message || 'Invalid JSON syntax'}`,
+        error: `JSON parse error: ${err?.message || 'Invalid syntax'}`,
       };
     }
 
-    let rawRecords: unknown[];
+    let rawRecords: any[] = [];
     if (Array.isArray(parsed)) {
       rawRecords = parsed;
     } else if (parsed && typeof parsed === 'object') {
-      const envelope = parsed as any;
+      const envelope = parsed as Record<string, any>;
       if (Array.isArray(envelope.sessions)) {
         rawRecords = envelope.sessions;
       } else {
@@ -146,7 +430,7 @@ export class Store {
     const newlyAddedSessions: SessionResult[] = [];
 
     for (const item of rawRecords) {
-      const sanitized = this.sanitizeSession(item);
+      const sanitized = sanitizeSession(item);
       if (!sanitized) {
         invalidCount++;
         continue;
@@ -198,6 +482,7 @@ export class Store {
       };
     }
 
+    // Sort newest first
     workingSessions.sort((a, b) => b.timestamp - a.timestamp);
     const clampedSessions = workingSessions.slice(0, MAX_SESSIONS);
 
@@ -228,6 +513,13 @@ export class Store {
       this.updatePB(s);
     }
 
+    // Write-through to Dexie
+    if (!this.isFallbackMode && newlyAddedSessions.length > 0) {
+      this.db.sessions.bulkPut(newlyAddedSessions).catch(err => {
+        console.error('[Store] Failed to write imported sessions to Dexie:', err);
+      });
+    }
+
     return {
       success: true,
       importedCount,
@@ -245,6 +537,11 @@ export class Store {
     try {
       localStorage.removeItem(LS_SESSIONS);
     } catch {}
+    if (!this.isFallbackMode) {
+      this.db.sessions.clear().catch(err => {
+        console.error('[Store] Failed to clear sessions in Dexie:', err);
+      });
+    }
   }
 
   getFilteredSessions(options: FilterSessionsOptions = {}): FilteredSessionsResult {
@@ -295,11 +592,11 @@ export class Store {
     const totalPages = Math.max(1, Math.ceil(totalRecords / safePageSize));
     const safePage = Math.max(1, Math.min(page, totalPages));
 
-    const startIdx = (safePage - 1) * safePageSize;
-    const pagedSessions = filtered.slice(startIdx, startIdx + safePageSize);
+    const startIndex = (safePage - 1) * safePageSize;
+    const paginatedSessions = filtered.slice(startIndex, startIndex + safePageSize);
 
     return {
-      sessions: pagedSessions,
+      sessions: paginatedSessions,
       totalRecords,
       totalPages,
       currentPage: safePage,
@@ -307,12 +604,11 @@ export class Store {
     };
   }
 
-  // ── Routine Summaries ──────────────────────────────────────────────
+  // ── Routines ──────────────────────────────────────────────────────
   addRoutineSummary(summary: RoutineSummary): void {
     if (!summary || !summary.routineId) return;
-    if (this.routineSummaries.some(r => r.id === summary.id)) return;
 
-    const sanitized = this.sanitizeRoutineSummary(summary);
+    const sanitized = sanitizeRoutineSummary(summary);
     if (!sanitized) return;
 
     this.routineSummaries.unshift(sanitized);
@@ -320,10 +616,292 @@ export class Store {
       this.routineSummaries = this.routineSummaries.slice(0, MAX_ROUTINES);
     }
     this.saveRoutineSummaries();
+
+    if (!this.isFallbackMode) {
+      this.db.routineCompletions.put(sanitized).catch(err => {
+        console.error('[Store] Failed to write routine summary to Dexie:', err);
+      });
+    }
   }
 
   getRoutineSummaries(limit = 20): RoutineSummary[] {
     return this.routineSummaries.slice(0, limit);
+  }
+
+  // ── Custom Playlists ──────────────────────────────────────────────
+  getPlaylists(): Playlist[] {
+    return [...this.playlists];
+  }
+
+  getPlaylistById(id: string): Playlist | undefined {
+    if (!id) return undefined;
+    const found = this.playlists.find(p => p.id === id);
+    if (found) return found;
+
+    // Check if it's a built-in routine ID
+    const preset = TRAINING_ROUTINES.find(r => r.id === id);
+    if (preset) {
+      return convertRoutineToPlaylist(preset);
+    }
+    return undefined;
+  }
+
+  savePlaylist(playlist: Playlist): { success: boolean; errors?: string[] } {
+    const val = validatePlaylist(playlist);
+    if (!val.valid) {
+      return { success: false, errors: val.errors };
+    }
+
+    const clean: Playlist = {
+      ...playlist,
+      name: playlist.name.trim(),
+      description: playlist.description?.trim() ?? '',
+      defaultRestIntervalSec: typeof playlist.defaultRestIntervalSec === 'number' && Number.isFinite(playlist.defaultRestIntervalSec)
+        ? Math.max(0, Math.min(120, playlist.defaultRestIntervalSec))
+        : 4,
+      entries: playlist.entries.map((e, idx) => ({
+        id: e.id || `entry_${Date.now()}_${idx}`,
+        scenarioId: e.scenarioId,
+        durationSec: Number.isFinite(e.durationSec) ? Math.max(5, Math.min(600, e.durationSec)) : 60,
+        restIntervalSec: typeof e.restIntervalSec === 'number' && Number.isFinite(e.restIntervalSec)
+          ? Math.max(0, Math.min(120, e.restIntervalSec))
+          : undefined,
+        configOverrides: e.configOverrides ? { ...e.configOverrides } : undefined,
+      })),
+      isBuiltin: false,
+      updatedAt: Date.now(),
+      createdAt: playlist.createdAt || Date.now(),
+    };
+
+    const existingIdx = this.playlists.findIndex(p => p.id === clean.id);
+    if (existingIdx !== -1) {
+      this.playlists[existingIdx] = clean;
+    } else {
+      this.playlists.unshift(clean);
+    }
+
+    this.savePlaylists();
+
+    if (!this.isFallbackMode) {
+      this.db.playlists.put(clean).catch(err => {
+        console.error('[Store] Failed to write playlist to Dexie:', err);
+      });
+    }
+
+    return { success: true };
+  }
+
+  createPlaylist(name: string, description = '', entries: any[] = []): { success: boolean; playlist?: Playlist; errors?: string[] } {
+    const newPlaylist: Playlist = {
+      id: `pl_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      name: (name || 'New Custom Playlist').trim(),
+      description: description.trim(),
+      defaultRestIntervalSec: 4,
+      entries: entries.map((e, idx) => ({
+        id: e.id || `entry_${Date.now()}_${idx}`,
+        scenarioId: e.scenarioId,
+        durationSec: Number.isFinite(e.durationSec) ? e.durationSec : 60,
+        restIntervalSec: e.restIntervalSec,
+        configOverrides: e.configOverrides,
+      })),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      isBuiltin: false,
+    };
+
+    const result = this.savePlaylist(newPlaylist);
+    if (!result.success) {
+      return { success: false, errors: result.errors };
+    }
+    return { success: true, playlist: newPlaylist };
+  }
+
+  deletePlaylist(id: string): boolean {
+    if (!id) return false;
+
+    const idx = this.playlists.findIndex(p => p.id === id);
+    if (idx === -1) return false;
+
+    const target = this.playlists[idx];
+    if (target.isBuiltin) return false;
+
+    this.playlists.splice(idx, 1);
+    this.savePlaylists();
+
+    if (!this.isFallbackMode) {
+      this.db.playlists.delete(id).catch(err => {
+        console.error('[Store] Failed to delete playlist in Dexie:', err);
+      });
+    }
+
+    return true;
+  }
+
+  duplicatePlaylist(id: string, newName?: string): Playlist | null {
+    const original = this.getPlaylistById(id);
+    if (!original) return null;
+
+    const cloned = clonePlaylist(original);
+    if (newName) {
+      cloned.name = newName;
+    }
+    const saveRes = this.savePlaylist(cloned);
+    if (!saveRes.success) return null;
+
+    return cloned;
+  }
+
+  // ── Custom Scenarios (Phase 4) ────────────────────────────────────
+  getCustomScenarios(): WarmupLabScenarioV1[] {
+    return [...this.customScenarios];
+  }
+
+  getCustomScenario(id: string): WarmupLabScenarioV1 | undefined {
+    if (!id) return undefined;
+    return this.customScenarios.find(s => s.id === id);
+  }
+
+  getCustomScenarioConfig(id: string): ScenarioConfig | undefined {
+    const custom = this.getCustomScenario(id);
+    if (!custom) return undefined;
+    return convertCustomScenarioToConfig(custom);
+  }
+
+  saveCustomScenario(
+    scenario: WarmupLabScenarioV1,
+    options: { resetPB?: boolean; incrementVersion?: boolean } = {}
+  ): { success: boolean; errors?: string[] } {
+    const val = validateCustomScenarioJSON(scenario);
+    if (!val.valid) {
+      return { success: false, errors: val.errors };
+    }
+
+    const currentVersion = scenario.metadata?.configVersion || 1;
+    const finalVersion = options.incrementVersion ? currentVersion + 1 : currentVersion;
+
+    const clean: WarmupLabScenarioV1 = {
+      ...scenario,
+      id: scenario.id.trim(),
+      name: scenario.name.trim(),
+      description: scenario.description ? scenario.description.trim() : '',
+      tags: scenario.tags ? scenario.tags.map(t => t.trim()).filter(Boolean) : [],
+      metadata: {
+        ...scenario.metadata,
+        updatedAt: Date.now(),
+        configVersion: finalVersion,
+        isCustom: true,
+      },
+    };
+
+    const idx = this.customScenarios.findIndex(s => s.id === clean.id);
+    if (idx !== -1) {
+      this.customScenarios[idx] = clean;
+    } else {
+      this.customScenarios.unshift(clean);
+    }
+
+    if (!this.isFallbackMode) {
+      this.db.customScenarios.put(clean).catch(err => {
+        console.error('[Store] Failed to write custom scenario to Dexie:', err);
+      });
+    }
+
+    if (options.resetPB) {
+      this.resetPB(clean.id);
+    }
+
+    return { success: true };
+  }
+
+  saveAsNewCustomScenario(
+    scenario: WarmupLabScenarioV1,
+    newName?: string
+  ): { success: boolean; scenario?: WarmupLabScenarioV1; errors?: string[] } {
+    const timestamp = Date.now();
+    const newId = `custom_${timestamp}_${Math.random().toString(36).substring(2, 7)}`;
+    const cloned: WarmupLabScenarioV1 = {
+      ...JSON.parse(JSON.stringify(scenario)),
+      id: newId,
+      name: newName ? newName.trim() : (scenario.name ? (scenario.name.includes('(Copy)') ? scenario.name : `${scenario.name} (Copy)`) : 'New Custom Drill'),
+      metadata: {
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        configVersion: 1,
+        isCustom: true,
+      },
+    };
+
+    const res = this.saveCustomScenario(cloned);
+    if (!res.success) {
+      return { success: false, errors: res.errors };
+    }
+    return { success: true, scenario: cloned };
+  }
+
+  resetPB(scenarioId: string): void {
+    if (!scenarioId) return;
+
+    delete this.pbs[scenarioId];
+    for (const key of Object.keys(this.pbs)) {
+      if (key.startsWith(`${scenarioId}:`)) {
+        delete this.pbs[key];
+      }
+    }
+
+    this.savePBs();
+
+    if (!this.isFallbackMode) {
+      this.db.personalBests.where('scenarioId').equals(scenarioId).delete().catch(() => {
+        this.db.personalBests.delete(scenarioId).catch(() => {});
+      });
+    }
+  }
+
+  deleteCustomScenario(id: string): boolean {
+    if (!id) return false;
+    const idx = this.customScenarios.findIndex(s => s.id === id);
+    if (idx === -1) return false;
+
+    this.customScenarios.splice(idx, 1);
+
+    if (!this.isFallbackMode) {
+      this.db.customScenarios.delete(id).catch(err => {
+        console.error('[Store] Failed to delete custom scenario in Dexie:', err);
+      });
+    }
+
+    return true;
+  }
+
+  duplicateCustomScenario(id: string, newName?: string): WarmupLabScenarioV1 | null {
+    const original = this.getCustomScenario(id);
+    if (!original) return null;
+
+    const timestamp = Date.now();
+    const cloned: WarmupLabScenarioV1 = {
+      ...JSON.parse(JSON.stringify(original)),
+      id: `custom_${timestamp}_${Math.random().toString(36).substring(2, 7)}`,
+      name: newName ? newName.trim() : `${original.name} (Copy)`,
+      metadata: {
+        createdAt: timestamp,
+        updatedAt: timestamp,
+        configVersion: 1,
+        isCustom: true,
+      },
+    };
+
+    const res = this.saveCustomScenario(cloned);
+    if (!res.success) return null;
+    return cloned;
+  }
+
+  getScenario(id: string): ScenarioConfig | undefined {
+    return getScenarioById(id);
+  }
+
+  getAllScenarios(): ScenarioConfig[] {
+    const customConfigs = this.customScenarios.map(convertCustomScenarioToConfig);
+    return [...customConfigs, ...SCENARIOS];
   }
 
   // ── Personal bests ─────────────────────────────────────────────────
@@ -435,10 +1013,12 @@ export class Store {
     }>();
 
     for (const s of this.sessions) {
-      const existing = grouped.get(s.scenarioId);
+      const groupKey = s.configVersion ? `${s.scenarioId}#v${s.configVersion}` : s.scenarioId;
+      const displayName = s.configVersion ? `${s.scenarioName} (v${s.configVersion})` : s.scenarioName;
+      const existing = grouped.get(groupKey);
       if (!existing) {
-        grouped.set(s.scenarioId, {
-          scenarioName: s.scenarioName,
+        grouped.set(groupKey, {
+          scenarioName: displayName,
           category: s.category,
           bestScore: s.score,
           bestAccuracy: s.accuracy,
@@ -474,7 +1054,7 @@ export class Store {
       .slice(0, limit);
   }
 
-  getScenarioTrend(scenarioId: string, difficulty?: DifficultyId): ScenarioTrendResult {
+  getScenarioTrend(scenarioId: string, difficulty?: DifficultyId, configVersion?: number): ScenarioTrendResult {
     const sc = getScenarioById(scenarioId);
     const meaningfulReactionTime = sc ? sc.meaningfulReactionTime : true;
 
@@ -483,11 +1063,25 @@ export class Store {
       matches = matches.filter(s => s.difficulty === difficulty);
     }
 
+    // Separate configuration versions strictly:
+    // If target configVersion is explicitly passed, filter strictly to that version.
+    // If omitted, take the latest session's version (or undefined for legacy) so different versions are never mixed!
+    const targetVersion = configVersion !== undefined
+      ? configVersion
+      : (matches.length > 0 ? matches[0].configVersion : undefined);
+
+    if (targetVersion !== undefined) {
+      matches = matches.filter(s => s.configVersion === targetVersion);
+    } else {
+      matches = matches.filter(s => s.configVersion === undefined);
+    }
+
     if (matches.length < 2) {
       return {
         hasEnoughData: false,
         scenarioId,
         difficulty,
+        configVersion: targetVersion,
         sampleCount: matches.length,
         meaningfulReactionTime,
         recentScores: matches.map(s => s.score).reverse(),
@@ -529,6 +1123,7 @@ export class Store {
       hasEnoughData: true,
       scenarioId,
       difficulty,
+      configVersion: targetVersion,
       sampleCount: matches.length,
       latest,
       previous,
@@ -554,11 +1149,20 @@ export class Store {
   // ── Private helpers ─────────────────────────────────────────────────
   private updatePB(result: SessionResult): boolean {
     if (!result.scenarioId) return false;
+
+    // Do not distort standard PBs if drill was run with a non-standard custom duration
+    const sc = getScenarioById(result.scenarioId);
+    if (sc && Number.isFinite(result.durationSec) && result.durationSec !== sc.durationSec) {
+      return false;
+    }
+
     let isPB = false;
 
     // Like-for-like scenario comparison
     const prev = this.pbs[result.scenarioId];
-    if (!prev || result.score > prev.score) {
+    const isNewVersion = prev && prev.configVersion !== undefined && result.configVersion !== undefined && prev.configVersion !== result.configVersion;
+
+    if (!prev || isNewVersion || result.score > prev.score) {
       this.pbs[result.scenarioId] = {
         scenarioId:   result.scenarioId,
         difficulty:   result.difficulty,
@@ -566,15 +1170,17 @@ export class Store {
         accuracy:     result.accuracy,
         avgReactionMs:result.avgReactionMs,
         timestamp:    result.timestamp,
+        configVersion:result.configVersion,
       };
       isPB = true;
     }
 
-    // Like-for-like scenario + difficulty comparison
+    // Per-difficulty comparison
     if (result.difficulty) {
       const diffKey = `${result.scenarioId}:${result.difficulty}`;
       const prevDiff = this.pbs[diffKey];
-      if (!prevDiff || result.score > prevDiff.score) {
+      const isDiffNewVersion = prevDiff && prevDiff.configVersion !== undefined && result.configVersion !== undefined && prevDiff.configVersion !== result.configVersion;
+      if (!prevDiff || isDiffNewVersion || result.score > prevDiff.score) {
         this.pbs[diffKey] = {
           scenarioId:   result.scenarioId,
           difficulty:   result.difficulty,
@@ -582,6 +1188,7 @@ export class Store {
           accuracy:     result.accuracy,
           avgReactionMs:result.avgReactionMs,
           timestamp:    result.timestamp,
+          configVersion:result.configVersion,
         };
         isPB = true;
       }
@@ -593,109 +1200,6 @@ export class Store {
     return isPB;
   }
 
-  private sanitizeSession(item: any): SessionResult | null {
-    if (!item || typeof item !== 'object') return null;
-    if (typeof item.scenarioId !== 'string' || item.scenarioId.trim() === '') return null;
-
-    const hits = Math.max(0, Math.floor(Number.isFinite(item.hits) ? item.hits : 0));
-    const misses = Math.max(0, Math.floor(Number.isFinite(item.misses) ? item.misses : 0));
-    const headshots = Math.min(hits, Math.max(0, Math.floor(Number.isFinite(item.headshots) ? item.headshots : 0)));
-    const bodyHits = typeof item.bodyHits === 'number' && Number.isFinite(item.bodyHits)
-      ? item.bodyHits
-      : Math.max(0, hits - headshots);
-    const shotsFired = typeof item.shotsFired === 'number' && Number.isFinite(item.shotsFired)
-      ? item.shotsFired
-      : hits + misses;
-
-    const score = Math.max(0, Math.floor(Number.isFinite(item.score) ? item.score : 0));
-    const durationSec = Math.max(0, Number.isFinite(item.durationSec) ? item.durationSec : 0);
-    const accuracy = typeof item.accuracy === 'number' && Number.isFinite(item.accuracy)
-      ? Number(item.accuracy.toFixed(1))
-      : (shotsFired > 0 ? Number(((hits / shotsFired) * 100).toFixed(1)) : 0);
-    const headshotPct = typeof item.headshotPct === 'number' && Number.isFinite(item.headshotPct)
-      ? Number(item.headshotPct.toFixed(1))
-      : (hits > 0 ? Number(((headshots / hits) * 100).toFixed(1)) : 0);
-
-    const targetsPerSecond = typeof item.targetsPerSecond === 'number' && Number.isFinite(item.targetsPerSecond)
-      ? item.targetsPerSecond
-      : (durationSec > 0 ? Number((hits / durationSec).toFixed(2)) : 0);
-    const targetsPerMinute = typeof item.targetsPerMinute === 'number' && Number.isFinite(item.targetsPerMinute)
-      ? item.targetsPerMinute
-      : (durationSec > 0 ? Number(((hits / durationSec) * 60).toFixed(1)) : 0);
-
-    return {
-      id: typeof item.id === 'string' && item.id ? item.id : `session_${Date.now()}_${Math.random()}`,
-      scenarioId: item.scenarioId,
-      scenarioName: typeof item.scenarioName === 'string' && item.scenarioName ? item.scenarioName : item.scenarioId,
-      category: typeof item.category === 'string' ? item.category : 'flick',
-      difficulty: typeof item.difficulty === 'string' ? item.difficulty : 'intermediate',
-      timestamp: typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) ? item.timestamp : Date.now(),
-      durationSec,
-      score,
-      hits,
-      misses,
-      headshots,
-      bodyHits,
-      shotsFired,
-      accuracy,
-      headshotPct,
-      avgReactionMs: typeof item.avgReactionMs === 'number' && Number.isFinite(item.avgReactionMs) ? Math.round(item.avgReactionMs) : 0,
-      medianReactionMs: typeof item.medianReactionMs === 'number' && Number.isFinite(item.medianReactionMs) ? Math.round(item.medianReactionMs) : 0,
-      bestReactionMs: typeof item.bestReactionMs === 'number' && Number.isFinite(item.bestReactionMs) ? Math.round(item.bestReactionMs) : 0,
-      targetsPerSecond,
-      targetsPerMinute,
-      shotsMoving: typeof item.shotsMoving === 'number' && Number.isFinite(item.shotsMoving) ? item.shotsMoving : 0,
-      shotsStationary: typeof item.shotsStationary === 'number' && Number.isFinite(item.shotsStationary) ? item.shotsStationary : 0,
-      timeOnTarget: typeof item.timeOnTarget === 'number' && Number.isFinite(item.timeOnTarget) ? item.timeOnTarget : undefined,
-      flashAvoidRate: typeof item.flashAvoidRate === 'number' && Number.isFinite(item.flashAvoidRate) ? item.flashAvoidRate : undefined,
-    };
-  }
-
-  private sanitizeRoutineSummary(item: any): RoutineSummary | null {
-    if (!item || typeof item !== 'object') return null;
-    if (typeof item.routineId !== 'string' || item.routineId.trim() === '') return null;
-
-    const totalDurationSec = Math.max(0, Number.isFinite(item.totalDurationSec) ? item.totalDurationSec : 0);
-    const activeDurationSec = typeof item.activeDurationSec === 'number' && Number.isFinite(item.activeDurationSec)
-      ? Math.max(0, item.activeDurationSec)
-      : totalDurationSec;
-    const totalElapsedSec = typeof item.totalElapsedSec === 'number' && Number.isFinite(item.totalElapsedSec)
-      ? Math.max(0, item.totalElapsedSec)
-      : totalDurationSec;
-    const transitionSec = typeof item.transitionSec === 'number' && Number.isFinite(item.transitionSec)
-      ? Math.max(0, item.transitionSec)
-      : 0;
-    const pausedSec = typeof item.pausedSec === 'number' && Number.isFinite(item.pausedSec)
-      ? Math.max(0, item.pausedSec)
-      : 0;
-    const retriesCount = typeof item.retriesCount === 'number' && Number.isFinite(item.retriesCount)
-      ? Math.max(0, item.retriesCount)
-      : 0;
-
-    return {
-      id: typeof item.id === 'string' && item.id ? item.id : `routine_${Date.now()}_${Math.random()}`,
-      routineId: item.routineId,
-      routineName: typeof item.routineName === 'string' ? item.routineName : item.routineId,
-      difficulty: typeof item.difficulty === 'string' ? item.difficulty : 'intermediate',
-      timestamp: typeof item.timestamp === 'number' && Number.isFinite(item.timestamp) ? item.timestamp : Date.now(),
-      totalDurationSec,
-      activeDurationSec,
-      totalElapsedSec,
-      transitionSec,
-      pausedSec,
-      retriesCount,
-      drillsCompleted: Math.max(0, Number.isFinite(item.drillsCompleted) ? item.drillsCompleted : 0),
-      totalDrills: Math.max(0, Number.isFinite(item.totalDrills) ? item.totalDrills : 0),
-      totalScore: Math.max(0, Number.isFinite(item.totalScore) ? item.totalScore : 0),
-      overallAccuracy: typeof item.overallAccuracy === 'number' && Number.isFinite(item.overallAccuracy)
-        ? Number(item.overallAccuracy.toFixed(1))
-        : 0,
-      totalHits: Math.max(0, Number.isFinite(item.totalHits) ? item.totalHits : 0),
-      totalHeadshots: Math.max(0, Number.isFinite(item.totalHeadshots) ? item.totalHeadshots : 0),
-      totalShotsFired: Math.max(0, Number.isFinite(item.totalShotsFired) ? item.totalShotsFired : 0),
-    };
-  }
-
   private loadSessions(): SessionResult[] {
     try {
       const raw = localStorage.getItem(LS_SESSIONS);
@@ -704,7 +1208,7 @@ export class Store {
       if (!Array.isArray(parsed)) return [];
       const sanitizedList: SessionResult[] = [];
       for (const item of parsed) {
-        const clean = this.sanitizeSession(item);
+        const clean = sanitizeSession(item);
         if (clean) sanitizedList.push(clean);
       }
       return sanitizedList.slice(0, MAX_SESSIONS);
@@ -714,7 +1218,10 @@ export class Store {
   }
 
   private saveSessions(): void {
-    try { localStorage.setItem(LS_SESSIONS, JSON.stringify(this.sessions)); } catch {}
+    try {
+      // Keep mirror in localStorage capped to avoid quota exceeded errors
+      localStorage.setItem(LS_SESSIONS, JSON.stringify(this.sessions.slice(0, MAX_SESSIONS)));
+    } catch {}
   }
 
   private loadPBs(): Record<string, PersonalBest> {
@@ -734,6 +1241,7 @@ export class Store {
             accuracy: typeof p.accuracy === 'number' && Number.isFinite(p.accuracy) ? p.accuracy : 0,
             avgReactionMs: typeof p.avgReactionMs === 'number' && Number.isFinite(p.avgReactionMs) ? p.avgReactionMs : 0,
             timestamp: typeof p.timestamp === 'number' && Number.isFinite(p.timestamp) ? p.timestamp : Date.now(),
+            configVersion: typeof p.configVersion === 'number' && Number.isFinite(p.configVersion) ? p.configVersion : undefined,
           };
         }
       }
@@ -755,7 +1263,7 @@ export class Store {
       if (!Array.isArray(parsed)) return [];
       const sanitizedList: RoutineSummary[] = [];
       for (const item of parsed) {
-        const clean = this.sanitizeRoutineSummary(item);
+        const clean = sanitizeRoutineSummary(item);
         if (clean) sanitizedList.push(clean);
       }
       return sanitizedList.slice(0, MAX_ROUTINES);
@@ -765,6 +1273,29 @@ export class Store {
   }
 
   private saveRoutineSummaries(): void {
-    try { localStorage.setItem(LS_ROUTINES, JSON.stringify(this.routineSummaries)); } catch {}
+    try { localStorage.setItem(LS_ROUTINES, JSON.stringify(this.routineSummaries.slice(0, MAX_ROUTINES))); } catch {}
+  }
+
+  private loadPlaylists(): Playlist[] {
+    try {
+      const raw = localStorage.getItem(LS_PLAYLISTS);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const validPlaylists: Playlist[] = [];
+      for (const item of parsed) {
+        const val = validatePlaylist(item);
+        if (val.valid) {
+          validPlaylists.push(item as Playlist);
+        }
+      }
+      return validPlaylists;
+    } catch {
+      return [];
+    }
+  }
+
+  private savePlaylists(): void {
+    try { localStorage.setItem(LS_PLAYLISTS, JSON.stringify(this.playlists)); } catch {}
   }
 }

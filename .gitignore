@@ -28,3 +28,8 @@ pnpm-debug.log*
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# Research & Scratch
+scratch/
+research/
+Cosmetic SFX files/

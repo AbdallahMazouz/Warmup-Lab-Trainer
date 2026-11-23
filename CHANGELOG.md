@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.0] — 2026-11-23
+
+### Added
+- **Creator Studio & JSON Scenario Engine (Phase 4)**:
+  - Visual drill builder for custom scenarios with real-time parameter validation.
+  - Portable JSON scenario schema with import/export capabilities and prototype-pollution hardening.
+  - In-arena live preview mode allowing drill verification without saving.
+  - Archetype starter templates: Static Flick, Dynamic Strafe, Peeking Duel, and Smooth Tracking (`tracking_smooth`).
+  - Configuration versioning (`configVersion`): independent Personal Best tracking on material drill updates.
+  - Independent scenario cloning via "Save as New Drill" with isolated IDs and PB history.
+  - Targeted "Update & Reset PB" workflow resetting only the updated custom scenario.
+- **Custom Playlists & Sequencer**:
+  - Custom training playlist builder supporting mixed built-in and user-created drills.
+  - Graceful skipped-drill accounting and non-blocking notifications for missing custom scenarios.
+  - Accurate drill duration and rest period scheduling.
+- **Robust Storage Architecture (Dexie V2)**:
+  - High-performance IndexedDB storage with Dexie V2 schema.
+  - Seamless migration from legacy localStorage to IndexedDB preserving all history, personal bests, and playlists.
+  - Universal backup and restore supporting V1, V2, V3, and V4 schema formats.
+- **Competitive Esports UI/UX Redesign**:
+  - Complete visual overhaul inspired by competitive aim trainers (Electric Lime `#CCFF00` on obsidian graphite `#08090C`).
+  - Responsive layout across all standard display viewports (1920×1080 down to 375px mobile).
+  - High-visibility tactical HUD with real-time counter-strafe velocity visualizer and retaliatory threat indicators.
+  - Upgraded results screens with drill performance breakdowns, headshot ratios, and like-for-like trend analytics.
+
+---
+
 ## [1.0.0] — 2026-10-23
 
 ### Added

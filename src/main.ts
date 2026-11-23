@@ -11,7 +11,7 @@ import { Store } from './store';
 import { Engine } from './engine';
 import { UIManager } from './ui';
 
-function init(): void {
+async function init(): Promise<void> {
   const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
   const appContainer = document.getElementById('app') as HTMLElement;
 
@@ -23,6 +23,7 @@ function init(): void {
   // 1. Core modules
   const settings = new SettingsManager();
   const store = new Store();
+  await store.init();
   const audio = new AudioManager();
 
   // 2. 3D Renderer & Camera
@@ -36,7 +37,12 @@ function init(): void {
   const engine = new Engine(renderer, controls, audio, settings, store);
 
   // 5. User Interface Manager
-  new UIManager(engine, appContainer, canvas);
+  const ui = new UIManager(engine, appContainer, canvas);
+
+  // Expose on window for runtime diagnostics & testing
+  (window as any).engine = engine;
+  (window as any).ui = ui;
+  (window as any).store = store;
 
   // 6. Main requestAnimationFrame Loop
   function animate(): void {

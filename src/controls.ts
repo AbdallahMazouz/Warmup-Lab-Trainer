@@ -287,8 +287,19 @@ export class Controls {
   }
 
   isCounterStrafed(): boolean {
-    // Current horizontal velocity magnitude
-    const hSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
-    return hSpeed < 0.6; // Valorant dead-zone threshold for accurate first-shot
+    return this.getSpeed() < 0.6; // Valorant dead-zone threshold for accurate first-shot
+  }
+
+  getSpeed(): number {
+    return Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+  }
+
+  getActiveKeys(): { w: boolean; a: boolean; s: boolean; d: boolean } {
+    return {
+      w: this.moveForward,
+      a: this.moveLeft,
+      s: this.moveBackward,
+      d: this.moveRight,
+    };
   }
 }

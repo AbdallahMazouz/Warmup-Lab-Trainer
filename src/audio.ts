@@ -483,6 +483,11 @@ export class AudioManager {
     this._beep(180, 0.05, 'sawtooth', 0.08);
   }
 
+  playRetaliatoryShot(position?: { x: number; y: number; z: number }): void {
+    this._noise(0.18, 0.5);
+    this._beep(120, 0.15, 'sawtooth', 0.25, position);
+  }
+
   playFlash(): void {
     this._noise(0.3, 0.6);
   }

@@ -4,7 +4,7 @@
 
 import * as THREE from 'three';
 import {
-  COL_TARGET_IDLE, COL_TARGET_HIT,
+  COL_TARGET_IDLE, COL_TARGET_HIT, COL_TARGET_FRIEND,
   COL_ARENA_FLOOR, COL_ARENA_WALL, COL_ARENA_CEIL,
   COL_AMBIENT, COL_FOG,
   TARGET_HIT_FLASH_MS,
@@ -14,8 +14,11 @@ import {
   TARGET_TORSO_RADIUS,
   TARGET_TORSO_HEIGHT,
   TARGET_TORSO_OFFSET_Y,
+  TARGET_LEGS_RADIUS,
+  TARGET_LEGS_HEIGHT,
+  TARGET_LEGS_OFFSET_Y,
 } from './constants';
-import type { BodyPartType, HitRegionDimensions } from './types';
+import type { BodyPartType, HitRegionDimensions, TargetKind } from './types';
 
 export interface TargetBodyPart {
   type: BodyPartType;
@@ -30,7 +33,9 @@ export interface TargetVisual {
   headMesh: THREE.Mesh;
   torsoMesh: THREE.Mesh;
   shoulderMesh?: THREE.Mesh;
+  legsMesh?: THREE.Mesh;
   allMeshes: THREE.Mesh[];
+  kind?: TargetKind;
 }
 
 export class Renderer {
@@ -40,8 +45,9 @@ export class Renderer {
 
   private targetVisuals = new Map<string, TargetVisual>();
   private hitTimers     = new Map<string, number>();
-  private matIdle:  THREE.MeshPhongMaterial;
-  private matHit:   THREE.MeshPhongMaterial;
+  private matIdle:    THREE.MeshPhongMaterial;
+  private matHit:     THREE.MeshPhongMaterial;
+  private matFriend:  THREE.MeshPhongMaterial;
   private arenaMeshes: THREE.Object3D[] = [];
   private arenaDisposables: (THREE.BufferGeometry | THREE.Material)[] = [];
 
@@ -85,6 +91,12 @@ export class Renderer {
       color: COL_TARGET_HIT,
       emissive: COL_TARGET_HIT,
       emissiveIntensity: 0.9,
+    });
+    this.matFriend = new THREE.MeshPhongMaterial({
+      color: COL_TARGET_FRIEND,
+      emissive: COL_TARGET_FRIEND,
+      emissiveIntensity: 0.45,
+      shininess: 60,
     });
 
     this.buildArena();
@@ -190,56 +202,85 @@ export class Renderer {
     id: string,
     position: THREE.Vector3,
     radius: number,
-    dimensions?: HitRegionDimensions
+    dimensions?: HitRegionDimensions,
+    kind: TargetKind = 'standard'
   ): void {
+    const isSphere = dimensions?.shape === 'sphere';
     const scale = radius / TARGET_SIZE_DEFAULT;
-    const headRadius = dimensions?.headRadius ?? TARGET_HEAD_RADIUS * scale;
+    const headRadius = dimensions?.headRadius ?? (isSphere ? radius : TARGET_HEAD_RADIUS * scale);
     const torsoRadius = dimensions?.torsoRadius ?? TARGET_TORSO_RADIUS * scale;
     const torsoHeight = dimensions?.torsoHeight ?? TARGET_TORSO_HEIGHT * scale;
     const torsoOffsetY = dimensions?.torsoOffsetY ?? TARGET_TORSO_OFFSET_Y * scale;
     const headOffsetY = dimensions?.headOffsetY ?? 0;
+    const hasLegs = !isSphere && dimensions?.legsHeight !== undefined && dimensions?.legsRadius !== undefined;
+    const legsRadius = dimensions?.legsRadius ?? TARGET_LEGS_RADIUS * scale;
+    const legsHeight = dimensions?.legsHeight ?? TARGET_LEGS_HEIGHT * scale;
+    const legsOffsetY = dimensions?.legsOffsetY ?? TARGET_LEGS_OFFSET_Y * scale;
 
     const group = new THREE.Group();
     group.position.copy(position);
 
-    // Head mesh: Reusable unit sphere scaled to head radius
-    const headMesh = new THREE.Mesh(this.sharedHeadGeo, this.matIdle.clone());
+    const baseMat = kind === 'friend' ? this.matFriend : this.matIdle;
+
+    // Head / Sphere mesh
+    const headMesh = new THREE.Mesh(this.sharedHeadGeo, baseMat.clone());
     headMesh.scale.set(headRadius, headRadius, headRadius);
     headMesh.position.set(0, headOffsetY, 0);
     headMesh.castShadow = true;
     group.add(headMesh);
 
-    // Torso mesh: Reusable unit tapered cylinder scaled to torso dimensions
-    const torsoMesh = new THREE.Mesh(this.sharedTorsoGeo, this.matIdle.clone());
-    torsoMesh.scale.set(torsoRadius, torsoHeight, torsoRadius);
-    torsoMesh.position.set(0, torsoOffsetY, 0);
-    torsoMesh.castShadow = true;
-    group.add(torsoMesh);
-
-    // Shoulder accent: Reusable unit box scaled to shoulder dimensions
-    const shoulderMesh = new THREE.Mesh(this.sharedShoulderGeo, this.matIdle.clone());
-    shoulderMesh.scale.set(
-      torsoRadius * 2.2,
-      0.06 * scale,
-      torsoRadius * 1.2
-    );
-    shoulderMesh.position.set(0, torsoOffsetY + torsoHeight / 2 - 0.03 * scale, 0);
-    shoulderMesh.castShadow = true;
-    group.add(shoulderMesh);
-
-    // Typed body part mappings
+    const allMeshes: THREE.Mesh[] = [headMesh];
     const parts = new Map<BodyPartType, TargetBodyPart>();
     parts.set('head', { type: 'head', targetId: id, mesh: headMesh });
-    parts.set('torso', { type: 'torso', targetId: id, mesh: torsoMesh });
+
+    let torsoMesh: THREE.Mesh | undefined;
+    let shoulderMesh: THREE.Mesh | undefined;
+    let legsMesh: THREE.Mesh | undefined;
+
+    if (!isSphere) {
+      // Torso mesh
+      torsoMesh = new THREE.Mesh(this.sharedTorsoGeo, baseMat.clone());
+      torsoMesh.scale.set(torsoRadius, torsoHeight, torsoRadius);
+      torsoMesh.position.set(0, torsoOffsetY, 0);
+      torsoMesh.castShadow = true;
+      group.add(torsoMesh);
+      allMeshes.push(torsoMesh);
+      parts.set('torso', { type: 'torso', targetId: id, mesh: torsoMesh });
+
+      // Shoulder accent
+      shoulderMesh = new THREE.Mesh(this.sharedShoulderGeo, baseMat.clone());
+      shoulderMesh.scale.set(
+        torsoRadius * 2.2,
+        0.06 * scale,
+        torsoRadius * 1.2
+      );
+      shoulderMesh.position.set(0, torsoOffsetY + torsoHeight / 2 - 0.03 * scale, 0);
+      shoulderMesh.castShadow = true;
+      group.add(shoulderMesh);
+      allMeshes.push(shoulderMesh);
+
+      // Legs mesh (only if legs are part of hit model)
+      if (hasLegs) {
+        legsMesh = new THREE.Mesh(this.sharedTorsoGeo, baseMat.clone());
+        legsMesh.scale.set(legsRadius, legsHeight, legsRadius);
+        legsMesh.position.set(0, legsOffsetY, 0);
+        legsMesh.castShadow = true;
+        group.add(legsMesh);
+        allMeshes.push(legsMesh);
+        parts.set('legs', { type: 'legs', targetId: id, mesh: legsMesh });
+      }
+    }
 
     const visual: TargetVisual = {
       id,
       group,
       parts,
       headMesh,
-      torsoMesh,
+      torsoMesh: torsoMesh ?? headMesh,
       shoulderMesh,
-      allMeshes: [headMesh, torsoMesh, shoulderMesh],
+      legsMesh,
+      allMeshes,
+      kind,
     };
 
     this.scene.add(group);
@@ -308,8 +349,9 @@ export class Renderer {
       if (now >= expiry) {
         const visual = this.targetVisuals.get(id);
         if (visual) {
+          const baseMat = visual.kind === 'friend' ? this.matFriend : this.matIdle;
           for (const mesh of visual.allMeshes) {
-            (mesh.material as THREE.MeshPhongMaterial).copy(this.matIdle);
+            (mesh.material as THREE.MeshPhongMaterial).copy(baseMat);
           }
         }
         this.hitTimers.delete(id);

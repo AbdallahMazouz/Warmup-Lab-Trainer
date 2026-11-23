@@ -1,6 +1,6 @@
 {
   "name": "warmup-lab",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "WarmupLab — Browser-based 3D tactical aim trainer",
   "type": "module",
   "scripts": {
@@ -12,12 +12,14 @@
   },
   "devDependencies": {
     "@types/three": "^0.170.0",
+    "fake-indexeddb": "^6.2.8",
     "jsdom": "^26.1.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.5",
     "vitest": "^2.1.8"
   },
   "dependencies": {
+    "dexie": "^4.4.7",
     "three": "^0.170.0"
   }
 }

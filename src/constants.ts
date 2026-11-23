@@ -2,7 +2,7 @@
 // constants.ts — Global game constants
 // =====================================================================
 
-export const GAME_VERSION = '1.0.0';
+export const GAME_VERSION = '1.2.0';
 
 // Rendering
 export const FOV_DEFAULT = 103;
@@ -37,11 +37,15 @@ export const TARGET_HEAD_RADIUS     = 0.13; // head sphere radius (metres)
 export const TARGET_TORSO_RADIUS    = 0.18; // torso cylinder radius (metres)
 export const TARGET_TORSO_HEIGHT    = 0.50; // torso cylinder height (metres)
 export const TARGET_TORSO_OFFSET_Y  = -0.38; // torso center Y relative to head (metres)
+export const TARGET_LEGS_RADIUS     = 0.16; // legs cylinder radius (metres)
+export const TARGET_LEGS_HEIGHT     = 0.55; // legs cylinder height (metres)
+export const TARGET_LEGS_OFFSET_Y   = -0.90; // legs center Y relative to head (metres)
 
 // Colours
 export const COL_TARGET_IDLE   = 0xff4655;
 export const COL_TARGET_HIT    = 0x00ff88;
 export const COL_TARGET_WARN   = 0xffa020;
+export const COL_TARGET_FRIEND = 0x3399ff; // blue friendly target
 export const COL_ARENA_FLOOR   = 0x1a1a28;
 export const COL_ARENA_WALL    = 0x101018;
 export const COL_ARENA_CEIL    = 0x0f0f1a;
@@ -70,6 +74,16 @@ export const LS_SETTINGS    = 'vwt_settings_v2';
 export const LS_SESSIONS    = 'vwt_sessions_v2';
 export const LS_PERSONAL_BESTS = 'vwt_pbs_v2';
 export const LS_ROUTINES    = 'vwt_routines_v2';
+export const LS_PLAYLISTS   = 'vwt_playlists_v1';
+export const LS_MIGRATION_V3_STATUS = 'vwt_migration_v3_status';
+export const LS_MIGRATION_V3_ARCHIVED = 'vwt_migration_v3_archived';
+
+// Dexie Database
+export const DB_NAME = 'WarmupLabDB';
+export const DB_VERSION = 2;
+
+// Routine & Playlist defaults
+export const DEFAULT_REST_INTERVAL_SEC = 4;
 
 // Category IDs
 export const CAT_FLICK     = 'flick';
