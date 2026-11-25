@@ -24,12 +24,12 @@ export class GameplayEventEmitter {
     if (idx !== -1) arr.splice(idx, 1);
   }
 
-  emit<K extends keyof GameplayEventMap>(event: K, payload: GameplayEventMap[K]): void {
+  emit<K extends keyof GameplayEventMap>(event: K, payload?: GameplayEventMap[K]): void {
     const arr = this.listeners[event];
     if (!arr) return;
     const snapshot = [...arr];
     for (const listener of snapshot) {
-      listener(payload);
+      listener(payload as GameplayEventMap[K]);
     }
   }
 

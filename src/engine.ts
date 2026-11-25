@@ -32,7 +32,10 @@ import type {
   HeadshotEventPayload,
   KillEventPayload,
   SpawnEventPayload,
+  EngineHUDState,
 } from './types';
+
+export type { EngineHUDState };
 
 export interface EngineCallbacks {
   onTick?: (hud: EngineHUDState) => void;
@@ -44,25 +47,6 @@ export interface EngineCallbacks {
   onMovementInaccurate?: () => void;
   onSpawn?: (payload: SpawnEventPayload) => void;
   onRetaliationHit?: (targetId: string, penalty: number) => void;
-}
-
-export interface EngineHUDState {
-  timeRemaining: number;
-  totalDuration: number;
-  score: number;
-  hits: number;
-  misses: number;
-  accuracy: number;
-  headshots: number;
-  fps: number;
-  isTracking: boolean;
-  isPaused?: boolean;
-  shotsFired?: number;
-  headshotPct?: number;
-  playerSpeed?: number;
-  isStationary?: boolean;
-  activeKeys?: { w: boolean; a: boolean; s: boolean; d: boolean };
-  threatProgress?: number;
 }
 
 export class Engine {
@@ -136,7 +120,103 @@ export class Engine {
   // Streak tracking
   private currentKillStreak = 0;
 
-  callbacks: EngineCallbacks = {};
+  // Cached scenario flags to optimize hot update loop
+  private activeMovementEnabled = false;
+  private activeHasCover = false;
+
+  private _callbackUnsubs: Record<string, () => void> = {};
+  public readonly callbacks: EngineCallbacks = {
+    get onTick() {
+      return (hud: EngineHUDState) => (this as any)._engine?.events.emit('onTick', hud);
+    },
+    set onTick(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onTick']) eng._callbackUnsubs['onTick']();
+      if (fn) eng._callbackUnsubs['onTick'] = eng.events.on('onTick', fn);
+    },
+    get onHit() {
+      return (pts: number, headshot: boolean, _x?: number, _y?: number) =>
+        (this as any)._engine?.events.emit('onHit', { targetId: '', headshot, score: pts, accuracyScore: 0 });
+    },
+    set onHit(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onHit']) eng._callbackUnsubs['onHit']();
+      if (fn) eng._callbackUnsubs['onHit'] = eng.events.on('onHit', (p) => fn(p.score, p.headshot, 0, 0));
+    },
+    get onMiss() {
+      return () => (this as any)._engine?.events.emit('onMiss', { reason: 'aim_miss', penalty: 0 });
+    },
+    set onMiss(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onMiss']) eng._callbackUnsubs['onMiss']();
+      if (fn) eng._callbackUnsubs['onMiss'] = eng.events.on('onMiss', () => fn());
+    },
+    get onKill() {
+      return (event: KillEvent) => (this as any)._engine?.events.emit('onKill', event as any);
+    },
+    set onKill(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onKill']) eng._callbackUnsubs['onKill']();
+      if (fn) eng._callbackUnsubs['onKill'] = eng.events.on('onKill', (p: any) => fn({
+        targetId: p.targetId,
+        headshot: p.headshot,
+        position: p.position,
+        streak: p.streak,
+      }));
+    },
+    get onSpawn() {
+      return (payload: SpawnEventPayload) => (this as any)._engine?.events.emit('onSpawn', payload);
+    },
+    set onSpawn(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onSpawn']) eng._callbackUnsubs['onSpawn']();
+      if (fn) eng._callbackUnsubs['onSpawn'] = eng.events.on('onSpawn', fn);
+    },
+    get onMovementInaccurate() {
+      return () => (this as any)._engine?.events.emit('onMovementInaccurate');
+    },
+    set onMovementInaccurate(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onMovementInaccurate']) eng._callbackUnsubs['onMovementInaccurate']();
+      if (fn) eng._callbackUnsubs['onMovementInaccurate'] = eng.events.on('onMovementInaccurate', () => fn());
+    },
+    get onFlash() {
+      return (intensity: number, durationMs: number) =>
+        (this as any)._engine?.events.emit('onFlash', { intensity, durationMs });
+    },
+    set onFlash(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onFlash']) eng._callbackUnsubs['onFlash']();
+      if (fn) eng._callbackUnsubs['onFlash'] = eng.events.on('onFlash', (p) => fn(p.intensity, p.durationMs));
+    },
+    get onScenarioComplete() {
+      return (result: SessionResult, isPB: boolean) =>
+        (this as any)._engine?.events.emit('onScenarioComplete', { result, isPB });
+    },
+    set onScenarioComplete(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onScenarioComplete']) eng._callbackUnsubs['onScenarioComplete']();
+      if (fn) eng._callbackUnsubs['onScenarioComplete'] = eng.events.on('onScenarioComplete', (p) => fn(p.result, p.isPB));
+    },
+    get onRetaliationHit() {
+      return (targetId: string, penalty: number) =>
+        (this as any)._engine?.events.emit('onRetaliationHit', { targetId, penalty });
+    },
+    set onRetaliationHit(fn) {
+      const eng = (this as any)._engine as Engine;
+      if (!eng) return;
+      if (eng._callbackUnsubs['onRetaliationHit']) eng._callbackUnsubs['onRetaliationHit']();
+      if (fn) eng._callbackUnsubs['onRetaliationHit'] = eng.events.on('onRetaliationHit', (p) => fn(p.targetId, p.penalty));
+    },
+  };
 
   getKillStreak(): number {
     return this.currentKillStreak;
@@ -157,6 +237,7 @@ export class Engine {
 
     this.targets = new TargetManager(this.renderer);
     this.spawner = new Spawner();
+    Object.defineProperty(this.callbacks, '_engine', { value: this, enumerable: false, writable: true });
 
     // Vandal viewmodel — initialised once, persists for the app lifetime.
     this.vandal = new VandalViewModel();
@@ -182,9 +263,7 @@ export class Engine {
       this.score = Math.max(0, this.score - pen);
       this.audio.playRetaliatoryShot(target.position);
       this.events.emit('onMiss', { reason: 'retaliation_hit', penalty: -pen });
-      if (this.callbacks.onRetaliationHit) {
-        this.callbacks.onRetaliationHit(target.id, pen);
-      }
+      this.events.emit('onRetaliationHit', { targetId: target.id, penalty: pen });
     };
   }
 
@@ -249,9 +328,6 @@ export class Engine {
         maxHp: target.maxHp,
       };
       this.events.emit('onSpawn', payload);
-      if (this.callbacks.onSpawn) {
-        this.callbacks.onSpawn(payload);
-      }
     };
     this.spawner.callbacks.onWaveComplete = (waveIdx) => {
       if (this.resolvedConfig?.end.type === 'waves' && waveIdx >= this.resolvedConfig.end.waves) {
@@ -286,6 +362,22 @@ export class Engine {
     this.currentKillStreak = 0;
 
     this.audio.playStart();
+
+    // Cache scenario characteristics to avoid repeated string matching in hot frame loop
+    this.activeMovementEnabled = activeConfig.category === 'movement' ||
+      activeConfig.id === 'tactical-counter-strafe' ||
+      activeConfig.id.includes('duel') ||
+      activeConfig.id.includes('clutch') ||
+      activeConfig.id.includes('skirmish');
+
+    this.activeHasCover = Boolean(
+      this.resolvedConfig?.environment.customCover ||
+      activeConfig.id.includes('peek') ||
+      activeConfig.id === 'tactical-angle-clear' ||
+      activeConfig.id === 'tactical-jiggle' ||
+      activeConfig.id === 'tactical-wideswing' ||
+      activeConfig.id === 'flash-pop'
+    );
   }
 
   pause(): void {
@@ -328,6 +420,8 @@ export class Engine {
     this.activeConfig = null;
     this.resolvedConfig = null;
     this.currentKillStreak = 0;
+    this.activeMovementEnabled = false;
+    this.activeHasCover = false;
     this.spawner.reset();
     this.targets.clear();
   }
@@ -335,6 +429,10 @@ export class Engine {
   dispose(): void {
     this.stopScenario();
     this.vandal.dispose();
+    for (const unsub of Object.values(this._callbackUnsubs)) {
+      unsub();
+    }
+    this._callbackUnsubs = {};
   }
 
   private handleShoot(): void {
@@ -391,13 +489,8 @@ export class Engine {
         this.misses++;
         const pen = this.resolvedConfig?.scoring.movingShotPenalty ?? (SCORE_MISS * 2);
         this.score = Math.max(0, this.score + pen);
+        this.events.emit('onMovementInaccurate');
         this.events.emit('onMiss', { reason: 'movement_inaccurate', penalty: pen });
-        if (this.callbacks.onMovementInaccurate) {
-          this.callbacks.onMovementInaccurate();
-        }
-        if (this.callbacks.onMiss) {
-          this.callbacks.onMiss();
-        }
         return;
       }
     }
@@ -410,9 +503,6 @@ export class Engine {
         const pen = this.resolvedConfig.scoring.earlyShotPenalty ?? -200;
         this.score = Math.max(0, this.score + pen);
         this.events.emit('onMiss', { reason: 'early_shot', penalty: pen });
-        if (this.callbacks.onMiss) {
-          this.callbacks.onMiss();
-        }
         return;
       }
     }
@@ -460,7 +550,6 @@ export class Engine {
         this.targets.removeTarget(hit.targetId);
         this.spawner.onTargetKilled(hit.targetId, hitPos);
         this.events.emit('onMiss', { reason: 'friendly_fire', penalty: pen });
-        if (this.callbacks.onMiss) this.callbacks.onMiss();
         return;
       }
 
@@ -473,7 +562,6 @@ export class Engine {
         this.targets.removeTarget(hit.targetId);
         this.spawner.onTargetKilled(hit.targetId, hitPos);
         this.events.emit('onMiss', { reason: 'fake_peek', penalty: pen });
-        if (this.callbacks.onMiss) this.callbacks.onMiss();
         return;
       }
 
@@ -489,7 +577,6 @@ export class Engine {
           this.bodyHits++;
         }
         this.events.emit('onMiss', { reason: 'headshot_only_violation', penalty: pen });
-        if (this.callbacks.onMiss) this.callbacks.onMiss();
         // Disappear immediately after hit
         this.targets.removeTarget(hit.targetId);
         this.spawner.onTargetKilled(hit.targetId, hitPos);
@@ -547,8 +634,6 @@ export class Engine {
       }
 
       // Target disappears after every hit
-      const isEliminated = true;
-
       const remainingHp = 0;
       const hitPayload: HitEventPayload = {
         targetId: hit.targetId,
@@ -561,61 +646,35 @@ export class Engine {
         accuracyScore: hit.accuracyScore,
       };
 
-      if (!isEliminated) {
-        const bulletMult = (this.resolvedConfig?.id === 'spray-control' && this.sprayBulletsFired <= 10) ? 2 : 1;
-        this.score += Math.max(10, Math.round(pts * bulletMult * 0.25));
-        this.renderer.flashTarget(hit.targetId);
-        this.events.emit('onHit', hitPayload);
-        if (hit.headshot) {
-          this.events.emit('onHeadshot', hitPayload as HeadshotEventPayload);
-        }
-        if (this.callbacks.onHit) {
-          this.callbacks.onHit(pts, hit.headshot, 0, 0);
-        }
-      } else {
-        this.currentKillStreak++;
-        const currentStreak = this.currentKillStreak;
+      this.currentKillStreak++;
+      const currentStreak = this.currentKillStreak;
 
-        this.score += pts;
-        this.renderer.flashTarget(hit.targetId);
+      this.score += pts;
+      this.renderer.flashTarget(hit.targetId);
 
-        // Immediate removal from active gameplay and scene
-        this.targets.removeTarget(hit.targetId);
-        this.spawner.onTargetKilled(hit.targetId, hitPos);
+      // Immediate removal from active gameplay and scene
+      this.targets.removeTarget(hit.targetId);
+      this.spawner.onTargetKilled(hit.targetId, hitPos);
 
-        const killPayload: KillEventPayload = {
-          targetId: hit.targetId,
-          hitZone: hit.bodyPart ?? 'head',
-          headshot: hit.headshot,
-          position: hitPos,
-          streak: currentStreak,
-          score: pts,
-          reactionMs: hit.reactionMs,
-        };
+      const killPayload: KillEventPayload = {
+        targetId: hit.targetId,
+        hitZone: hit.bodyPart ?? 'head',
+        headshot: hit.headshot,
+        position: hitPos,
+        streak: currentStreak,
+        score: pts,
+        reactionMs: hit.reactionMs,
+      };
 
-        this.events.emit('onHit', hitPayload);
-        if (hit.headshot) {
-          this.events.emit('onHeadshot', hitPayload as HeadshotEventPayload);
-        }
-        this.events.emit('onKill', killPayload);
+      this.events.emit('onHit', hitPayload);
+      if (hit.headshot) {
+        this.events.emit('onHeadshot', hitPayload as HeadshotEventPayload);
+      }
+      this.events.emit('onKill', killPayload);
 
-        if (this.callbacks.onKill) {
-          this.callbacks.onKill({
-            targetId: hit.targetId,
-            headshot: hit.headshot,
-            position: hitPos,
-            streak: currentStreak,
-          });
-        }
-
-        if (this.callbacks.onHit) {
-          this.callbacks.onHit(pts, hit.headshot, 0, 0);
-        }
-
-        // Target count completion condition
-        if (this.resolvedConfig?.end.type === 'target_count' && this.hits >= this.resolvedConfig.end.targetCount) {
-          this.completeScenario();
-        }
+      // Target count completion condition
+      if (this.resolvedConfig?.end.type === 'target_count' && this.hits >= this.resolvedConfig.end.targetCount) {
+        this.completeScenario();
       }
     } else {
       this.misses++;
@@ -624,9 +683,6 @@ export class Engine {
         this.score = Math.max(0, this.score + missPen);
       }
       this.events.emit('onMiss', { reason: 'aim_miss', penalty: missPen });
-      if (this.callbacks.onMiss) {
-        this.callbacks.onMiss();
-      }
     }
   }
 
@@ -665,26 +721,26 @@ export class Engine {
       const accuracy = calculateAccuracy(this.hits, totalShots);
       const headshotPct = calculateHeadshotPercentage(this.headshots, this.hits);
 
-      if (this.callbacks.onTick) {
-        this.callbacks.onTick({
-          timeRemaining: remaining,
-          totalDuration: this.durationSec,
-          score: this.score,
-          hits: this.hits,
-          misses: this.misses,
-          accuracy,
-          headshots: this.headshots,
-          fps: this.currentFps,
-          isTracking: false,
-          isPaused: true,
-          shotsFired: this.shotsFired,
-          headshotPct,
-          playerSpeed: 0,
-          isStationary: true,
-          activeKeys: { w: false, a: false, s: false, d: false },
-          threatProgress: 0,
-        });
-      }
+      const hudState: EngineHUDState = {
+        timeRemaining: remaining,
+        totalDuration: this.durationSec,
+        score: this.score,
+        hits: this.hits,
+        misses: this.misses,
+        accuracy,
+        headshots: this.headshots,
+        fps: this.currentFps,
+        isTracking: false,
+        isPaused: true,
+        shotsFired: this.shotsFired,
+        headshotPct,
+        playerSpeed: 0,
+        isStationary: true,
+        activeKeys: { w: false, a: false, s: false, d: false },
+        threatProgress: 0,
+      };
+
+      this.events.emit('onTick', hudState);
 
       this.renderer.render();
       this.vandal.update(delta * 1000, now);
@@ -696,13 +752,7 @@ export class Engine {
     const remaining = Math.max(0, this.durationSec - elapsed);
 
     // Update player movement (enable movement if scenario involves counter-strafing or evasion)
-    const movementEnabled = this.activeConfig.category === 'movement' ||
-      this.activeConfig.id === 'tactical-counter-strafe' ||
-      this.activeConfig.id.includes('duel') ||
-      this.activeConfig.id.includes('clutch') ||
-      this.activeConfig.id.includes('skirmish');
-
-    this.controls.update(delta, movementEnabled);
+    this.controls.update(delta, this.activeMovementEnabled);
     this.targets.update(delta, now, this.controls.yawObject.position);
 
     // Spawner update (handles wave progression, peek lifecycles, and interval spawns)
@@ -713,15 +763,7 @@ export class Engine {
     if (this.activeConfig.category === 'tracking' || this.resolvedConfig?.interaction.mode === 'track') {
       this.totalTrackingTicks++;
       const ray = this.controls.getRay();
-      const hasCover = Boolean(
-        this.resolvedConfig?.environment.customCover ||
-        this.activeConfig?.id.includes('peek') ||
-        this.activeConfig?.id === 'tactical-angle-clear' ||
-        this.activeConfig?.id === 'tactical-jiggle' ||
-        this.activeConfig?.id === 'tactical-wideswing' ||
-        this.activeConfig?.id === 'flash-pop'
-      );
-      const track = this.targets.checkTracking(ray, hasCover);
+      const track = this.targets.checkTracking(ray, this.activeHasCover);
       if (track.isOnTarget) {
         this.onTargetTrackingTicks++;
         isCurrentlyTracking = true;
@@ -753,9 +795,7 @@ export class Engine {
       }
 
       const dur = this.activeConfig.flashDurationMs;
-      if (this.callbacks.onFlash) {
-        this.callbacks.onFlash(flashIntensity, dur);
-      }
+      this.events.emit('onFlash', { intensity: flashIntensity, durationMs: dur });
 
       this.nextFlashTime = now + 6000 + Math.random() * 7000;
     }
@@ -765,26 +805,26 @@ export class Engine {
     const accuracy = calculateAccuracy(this.hits, totalShots);
     const headshotPct = calculateHeadshotPercentage(this.headshots, this.hits);
 
-    if (this.callbacks.onTick) {
-      this.callbacks.onTick({
-        timeRemaining: remaining,
-        totalDuration: this.durationSec,
-        score: this.score,
-        hits: this.hits,
-        misses: this.misses,
-        accuracy,
-        headshots: this.headshots,
-        fps: this.currentFps,
-        isTracking: isCurrentlyTracking,
-        isPaused: this.isPaused,
-        shotsFired: this.shotsFired,
-        headshotPct,
-        playerSpeed: this.controls.getSpeed(),
-        isStationary: this.controls.isCounterStrafed(),
-        activeKeys: this.controls.getActiveKeys(),
-        threatProgress: this.targets.getHighestThreatProgress(this.controls.yawObject.position),
-      });
-    }
+    const hudState: EngineHUDState = {
+      timeRemaining: remaining,
+      totalDuration: this.durationSec,
+      score: this.score,
+      hits: this.hits,
+      misses: this.misses,
+      accuracy,
+      headshots: this.headshots,
+      fps: this.currentFps,
+      isTracking: isCurrentlyTracking,
+      isPaused: this.isPaused,
+      shotsFired: this.shotsFired,
+      headshotPct,
+      playerSpeed: this.controls.getSpeed(),
+      isStationary: this.controls.isCounterStrafed(),
+      activeKeys: this.controls.getActiveKeys(),
+      threatProgress: this.targets.getHighestThreatProgress(this.controls.yawObject.position),
+    };
+
+    this.events.emit('onTick', hudState);
 
     // Render frame
     this.renderer.render();
@@ -877,9 +917,7 @@ export class Engine {
       this.audio.playPB();
     }
 
-    if (this.callbacks.onScenarioComplete) {
-      this.callbacks.onScenarioComplete(result, isPB);
-    }
+    this.events.emit('onScenarioComplete', { result, isPB });
   }
 
   applySettings(): void {

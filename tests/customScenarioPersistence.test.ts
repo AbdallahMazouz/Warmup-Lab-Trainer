@@ -109,7 +109,8 @@ describe('Custom Scenario Persistence & Registry Integration (Phase 4)', () => {
     expect(backupJson).toContain('"version": 4');
     expect(backupJson).toContain('V4 Backup Drill');
 
-    // Create a fresh DB and store, then restore
+    // Clear and restore into fresh store & db
+    localStorage.clear();
     const restoreDb = new WarmupLabDatabase(`TestRestoreV4DB_${Date.now()}_${Math.random()}`);
     const restoreStore = new Store(restoreDb);
     await restoreStore.init();

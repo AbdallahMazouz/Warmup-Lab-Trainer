@@ -7,6 +7,7 @@ import {
   LS_PERSONAL_BESTS,
   LS_ROUTINES,
   LS_PLAYLISTS,
+  LS_CUSTOM_SCENARIOS,
 } from './constants';
 import type {
   SessionResult,
@@ -58,6 +59,7 @@ export class Store {
     this.pbs = this.loadPBs();
     this.routineSummaries = this.loadRoutineSummaries();
     this.playlists = this.loadPlaylists();
+    this.customScenarios = this.loadCustomScenarios();
   }
 
   /**
@@ -106,6 +108,9 @@ export class Store {
       const dbCustom = await this.db.customScenarios.toArray();
       if (dbCustom.length > 0) {
         this.customScenarios = dbCustom;
+        this.saveCustomScenarios();
+      } else if (this.customScenarios.length > 0) {
+        await this.db.customScenarios.bulkPut(this.customScenarios).catch(() => {});
       }
 
       this.isInitialized = true;
@@ -338,6 +343,7 @@ export class Store {
     this.savePBs();
     this.saveRoutineSummaries();
     this.savePlaylists();
+    this.saveCustomScenarios();
 
     return {
       success: true,
@@ -806,6 +812,8 @@ export class Store {
       });
     }
 
+    this.saveCustomScenarios();
+
     if (options.resetPB) {
       this.resetPB(clean.id);
     }
@@ -869,6 +877,8 @@ export class Store {
         console.error('[Store] Failed to delete custom scenario in Dexie:', err);
       });
     }
+
+    this.saveCustomScenarios();
 
     return true;
   }
@@ -1297,5 +1307,28 @@ export class Store {
 
   private savePlaylists(): void {
     try { localStorage.setItem(LS_PLAYLISTS, JSON.stringify(this.playlists)); } catch {}
+  }
+
+  private loadCustomScenarios(): WarmupLabScenarioV1[] {
+    try {
+      const raw = localStorage.getItem(LS_CUSTOM_SCENARIOS);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      const valid: WarmupLabScenarioV1[] = [];
+      for (const item of parsed) {
+        const val = validateCustomScenarioJSON(item);
+        if (val.valid) {
+          valid.push(item as WarmupLabScenarioV1);
+        }
+      }
+      return valid;
+    } catch {
+      return [];
+    }
+  }
+
+  private saveCustomScenarios(): void {
+    try { localStorage.setItem(LS_CUSTOM_SCENARIOS, JSON.stringify(this.customScenarios)); } catch {}
   }
 }

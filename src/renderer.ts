@@ -382,6 +382,7 @@ export class Renderer {
     this.sharedShoulderGeo.dispose();
     this.matIdle.dispose();
     this.matHit.dispose();
+    this.matFriend.dispose();
     for (const d of this.arenaDisposables) {
       d.dispose();
     }

@@ -259,10 +259,18 @@ export class Spawner {
     switch (spawner.mode) {
       case 'fixed_points': {
         const points = spawner.fixedPoints;
+        if (!points || !Array.isArray(points) || points.length === 0) {
+          pos = new THREE.Vector3(0, HEAD_LEVEL_Y, -12);
+          break;
+        }
         let bestPt = points[0];
         let maxMinDist = -1;
 
         for (const pt of points) {
+          if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number' || typeof pt.z !== 'number' ||
+              !Number.isFinite(pt.x) || !Number.isFinite(pt.y) || !Number.isFinite(pt.z)) {
+            continue;
+          }
           const v = new THREE.Vector3(pt.x, pt.y, pt.z);
           let minDist = Infinity;
           for (const t of this.targets.getTargets()) {
@@ -277,12 +285,25 @@ export class Spawner {
             bestPt = pt;
           }
         }
-        pos = new THREE.Vector3(bestPt.x, bestPt.y, bestPt.z);
+        pos = new THREE.Vector3(
+          bestPt && Number.isFinite(bestPt.x) ? bestPt.x : 0,
+          bestPt && Number.isFinite(bestPt.y) ? bestPt.y : HEAD_LEVEL_Y,
+          bestPt && Number.isFinite(bestPt.z) ? bestPt.z : -12
+        );
         break;
       }
 
       case 'grid': {
-        const { rows, cols, spacingX, spacingY } = spawner.gridDimensions;
+        if (!spawner.gridDimensions || typeof spawner.gridDimensions !== 'object') {
+          pos = new THREE.Vector3(0, HEAD_LEVEL_Y, -12);
+          break;
+        }
+        const rows = Math.max(1, Math.min(20, Math.floor(spawner.gridDimensions.rows || 1)));
+        const cols = Math.max(1, Math.min(20, Math.floor(spawner.gridDimensions.cols || 1)));
+        const spacingX = (typeof spawner.gridDimensions.spacingX === 'number' && Number.isFinite(spawner.gridDimensions.spacingX) && spawner.gridDimensions.spacingX > 0)
+          ? spawner.gridDimensions.spacingX : 1.5;
+        const spacingY = (typeof spawner.gridDimensions.spacingY === 'number' && Number.isFinite(spawner.gridDimensions.spacingY) && spawner.gridDimensions.spacingY > 0)
+          ? spawner.gridDimensions.spacingY : 1.5;
         const total = rows * cols;
         const startX = -((cols - 1) * spacingX) / 2;
         const startY = HEAD_LEVEL_Y - ((rows - 1) * spacingY) / 2;
@@ -314,7 +335,11 @@ export class Spawner {
       }
 
       case 'random_arc': {
-        const halfArcRad = ((spawner.arcDegrees / 2) * Math.PI) / 180;
+        const rawArc = spawner.arcDegrees;
+        const arc = (typeof rawArc === 'number' && Number.isFinite(rawArc) && rawArc > 0)
+          ? Math.min(360, rawArc)
+          : 90;
+        const halfArcRad = ((arc / 2) * Math.PI) / 180;
         let chosen = new THREE.Vector3(0, HEAD_LEVEL_Y, -12);
 
         for (let attempt = 0; attempt < 15; attempt++) {
@@ -328,7 +353,6 @@ export class Spawner {
             chosen = cand;
             break;
           }
-          chosen = cand;
         }
         pos = chosen;
         break;
