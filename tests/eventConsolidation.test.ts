@@ -20,6 +20,10 @@ describe('Phase 5 — Event Architecture & Consolidation', () => {
       setPixelRatio: vi.fn(),
       render: vi.fn(),
       clear: vi.fn(),
+      clearDepth: vi.fn(),
+      setViewport: vi.fn(),
+      setScissor: vi.fn(),
+      setScissorTest: vi.fn(),
       dispose: vi.fn(),
     } as unknown as THREE.WebGLRenderer;
 
@@ -54,9 +58,11 @@ describe('Phase 5 — Event Architecture & Consolidation', () => {
 
     engine.events.emit('onTick', mockHUD);
     expect(tickListener).toHaveBeenCalledWith(mockHUD);
+    expect(tickListener).toHaveBeenCalledTimes(1);
 
     engine.events.emit('onFlash', { intensity: 0.85, durationMs: 1800 });
     expect(flashListener).toHaveBeenCalledWith({ intensity: 0.85, durationMs: 1800 });
+    expect(flashListener).toHaveBeenCalledTimes(1);
 
     const mockResult: SessionResult = {
       id: 'session-test',
@@ -87,6 +93,7 @@ describe('Phase 5 — Event Architecture & Consolidation', () => {
 
     engine.events.emit('onScenarioComplete', { result: mockResult, isPB: true });
     expect(completeListener).toHaveBeenCalledWith({ result: mockResult, isPB: true });
+    expect(completeListener).toHaveBeenCalledTimes(1);
 
     // Unsubscribe removes listener
     unsubTick();
@@ -94,32 +101,51 @@ describe('Phase 5 — Event Architecture & Consolidation', () => {
     expect(tickListener).toHaveBeenCalledTimes(1);
   });
 
-  it('emits onRetaliationHit and onMovementInaccurate simultaneously through emitter and callback bridge', () => {
-    const emitterRetaliateSpy = vi.fn();
-    const callbackRetaliateSpy = vi.fn();
-    const emitterInaccurateSpy = vi.fn();
-    const callbackInaccurateSpy = vi.fn();
+  it('guarantees exactly-once execution for all gameplay events without duplicate dispatch', () => {
+    const tickSpy = vi.fn();
+    const hitSpy = vi.fn();
+    const flashSpy = vi.fn();
+    const completeSpy = vi.fn();
+    const inaccurateSpy = vi.fn();
+    const retaliateSpy = vi.fn();
 
-    engine.events.on('onRetaliationHit', emitterRetaliateSpy);
-    engine.callbacks.onRetaliationHit = callbackRetaliateSpy;
+    engine.events.on('onTick', tickSpy);
+    engine.events.on('onHit', hitSpy);
+    engine.events.on('onFlash', flashSpy);
+    engine.events.on('onScenarioComplete', completeSpy);
+    engine.events.on('onMovementInaccurate', inaccurateSpy);
+    engine.events.on('onRetaliationHit', retaliateSpy);
 
-    engine.events.on('onMovementInaccurate', emitterInaccurateSpy);
-    engine.callbacks.onMovementInaccurate = callbackInaccurateSpy;
-
-    // Trigger retaliation target event
-    (engine as unknown as { targets: { onTargetRetaliate?: (target: { id: string; retaliationPenalty?: number; position: THREE.Vector3 }) => void } })
-      .targets.onTargetRetaliate?.({ id: 'bot-1', retaliationPenalty: 300, position: new THREE.Vector3(0, 0, -10) });
-
-    // Since engine is not running, target retaliate returns early
-    // Now start scenario and test
     const config = SCENARIOS.find(s => s.id === 'tactical-counter-strafe')!;
     engine.startScenario(config);
 
+    // 1. Retaliation hit
     (engine as unknown as { targets: { onTargetRetaliate?: (target: { id: string; retaliationPenalty?: number; position: THREE.Vector3 }) => void } })
       .targets.onTargetRetaliate?.({ id: 'bot-1', retaliationPenalty: 300, position: new THREE.Vector3(0, 0, -10) });
 
-    expect(emitterRetaliateSpy).toHaveBeenCalledWith({ targetId: 'bot-1', penalty: 300 });
-    expect(callbackRetaliateSpy).toHaveBeenCalledWith('bot-1', 300);
+    expect(retaliateSpy).toHaveBeenCalledTimes(1);
+    expect(retaliateSpy).toHaveBeenCalledWith({ targetId: 'bot-1', penalty: 300 });
+
+    // 2. Movement inaccuracy
+    (engine as unknown as { controls: { isCounterStrafed: () => boolean; getRay: () => THREE.Ray } })
+      .controls.isCounterStrafed = () => false;
+    (engine as unknown as { handleShoot: () => void }).handleShoot();
+
+    expect(inaccurateSpy).toHaveBeenCalledTimes(1);
+
+    // 3. Tick update
+    (engine as unknown as { update: () => void }).update();
+    expect(tickSpy).toHaveBeenCalledTimes(1);
+
+    // 4. Backward-compatible bridge invokes event bus exactly once
+    const legacyCompleteSpy = vi.fn();
+    engine.events.on('onScenarioComplete', legacyCompleteSpy);
+
+    const mockResult = { id: 'test', score: 100 } as any;
+    engine.callbacks.onScenarioComplete?.(mockResult, false);
+
+    expect(completeSpy).toHaveBeenCalledTimes(1);
+    expect(legacyCompleteSpy).toHaveBeenCalledTimes(1);
 
     engine.stopScenario();
   });

@@ -254,6 +254,22 @@ const VALID_MOVEMENT_PATTERNS: MovementPattern[] = [
   'wideswing',
 ];
 
+const VALID_CUSTOM_CATEGORIES: readonly string[] = [
+  'flick',
+  'tracking',
+  'tactical',
+  'flash',
+  'reaction',
+  'movement',
+  'hybrid',
+  'switching',
+  'precision',
+  'decision',
+  'aimlab',
+  'kovaaks',
+  'custom',
+];
+
 export function validateCustomScenarioJSON(input: unknown): ValidationResult {
   const errors: string[] = [];
 
@@ -280,6 +296,14 @@ export function validateCustomScenarioJSON(input: unknown): ValidationResult {
     errors.push('Scenario ID is required and must be a non-empty string');
   } else if (!s.id.startsWith('custom_')) {
     errors.push('Custom scenario ID must start with "custom_" prefix');
+  } else if (!/^custom_[a-zA-Z0-9_-]{1,64}$/.test(s.id)) {
+    errors.push('Custom scenario ID must contain only alphanumeric characters, underscores, or hyphens (max 64 characters)');
+  }
+
+  if (s.category !== undefined) {
+    if (typeof s.category !== 'string' || !VALID_CUSTOM_CATEGORIES.includes(s.category.toLowerCase())) {
+      errors.push(`Invalid scenario category: "${s.category}". Supported: ${VALID_CUSTOM_CATEGORIES.join(', ')}`);
+    }
   }
 
   if (typeof s.name !== 'string' || !s.name.trim()) {

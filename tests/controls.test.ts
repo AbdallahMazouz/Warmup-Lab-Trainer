@@ -103,6 +103,101 @@ describe('Phase 6 — Controls Unit & Lifecycle Tests', () => {
     expect(shootSpy).toHaveBeenCalledTimes(1);
   });
 
+  it('updates movement flags and velocity on WASD key events when locked', () => {
+    controls.isLocked = true;
+
+    // Press KeyW
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    expect(controls.moveForward).toBe(true);
+    expect(controls.getActiveKeys().w).toBe(true);
+
+    // Update with delta
+    controls.update(0.016, true);
+    expect(controls.velocity.z).toBeLessThan(0); // Forward moves along -Z
+
+    // Release KeyW
+    document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+    expect(controls.moveForward).toBe(false);
+    expect(controls.getActiveKeys().w).toBe(false);
+
+    // Press KeyD (strafe right)
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyD' }));
+    expect(controls.moveRight).toBe(true);
+    controls.update(0.016, true);
+    expect(controls.velocity.x).toBeGreaterThan(0); // Right moves along +X
+
+    document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyD' }));
+    expect(controls.moveRight).toBe(false);
+  });
+
+  it('normalizes diagonal direction vector so diagonal movement is clamped to max speed', () => {
+    controls.isLocked = true;
+
+    // Move forward and right simultaneously
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyD' }));
+
+    controls.update(0.016, true);
+
+    // Direction vector must be normalized to length 1
+    const dirLength = Math.sqrt(
+      controls.direction.x * controls.direction.x +
+      controls.direction.z * controls.direction.z
+    );
+    expect(dirLength).toBeCloseTo(1.0, 4);
+    expect(controls.direction.x).toBeCloseTo(Math.SQRT1_2, 4);
+    expect(controls.direction.z).toBeCloseTo(Math.SQRT1_2, 4);
+
+    document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyW' }));
+    document.dispatchEvent(new KeyboardEvent('keyup', { code: 'KeyD' }));
+  });
+
+  it('evaluates counter-strafe deadzone and velocity state transitions', () => {
+    controls.isLocked = true;
+
+    // Initially stationary -> counter-strafed is true
+    expect(controls.getSpeed()).toBe(0);
+    expect(controls.isCounterStrafed()).toBe(true);
+
+    // Accelerate
+    controls.velocity.x = 2.5;
+    expect(controls.getSpeed()).toBe(2.5);
+    expect(controls.isCounterStrafed()).toBe(false); // Moving above 0.6 threshold
+
+    // Decelerate into deadzone (< 0.6 m/s)
+    controls.velocity.x = 0.4;
+    expect(controls.getSpeed()).toBeCloseTo(0.4, 2);
+    expect(controls.isCounterStrafed()).toBe(true);
+  });
+
+  it('resets all active key states when window loses focus (blur event)', () => {
+    controls.isLocked = true;
+
+    // Hold all keys
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyW' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyA' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyS' }));
+    document.dispatchEvent(new KeyboardEvent('keydown', { code: 'KeyD' }));
+
+    expect(controls.moveForward).toBe(true);
+    expect(controls.moveLeft).toBe(true);
+    expect(controls.moveBackward).toBe(true);
+    expect(controls.moveRight).toBe(true);
+
+    // Simulate window blur
+    window.dispatchEvent(new Event('blur'));
+
+    expect(controls.moveForward).toBe(false);
+    expect(controls.moveLeft).toBe(false);
+    expect(controls.moveBackward).toBe(false);
+    expect(controls.moveRight).toBe(false);
+    const active = controls.getActiveKeys();
+    expect(active.w).toBe(false);
+    expect(active.a).toBe(false);
+    expect(active.s).toBe(false);
+    expect(active.d).toBe(false);
+  });
+
   it('cleans up event listeners cleanly on dispose', () => {
     controls.dispose();
     controls.isLocked = true;

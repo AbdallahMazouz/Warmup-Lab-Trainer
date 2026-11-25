@@ -17,6 +17,8 @@ export function validatePlaylist(input: unknown): PlaylistValidationResult {
 
   if (typeof p.id !== 'string' || !p.id.trim()) {
     errors.push('Playlist must have a valid non-empty string ID.');
+  } else if (!/^[a-zA-Z0-9_-]{1,64}$/.test(p.id)) {
+    errors.push('Playlist ID must contain only alphanumeric characters, underscores, or hyphens (max 64 characters).');
   }
 
   if (typeof p.name !== 'string' || !p.name.trim()) {

@@ -30,4 +30,18 @@ describe('Phase 7 — Scenario Catalog Querying', () => {
     const all = getScenariosByCategory('all', [customConfig]);
     expect(all.length).toBe(SCENARIOS.length + 1);
   });
+
+  it('preserves all 39 built-in scenarios with unique IDs and required metadata', () => {
+    expect(SCENARIOS.length).toBe(39);
+    const ids = SCENARIOS.map(s => s.id);
+    const uniqueIds = new Set(ids);
+    expect(uniqueIds.size).toBe(39);
+    for (const s of SCENARIOS) {
+      expect(s.id).toBeDefined();
+      expect(typeof s.id).toBe('string');
+      expect(s.id.length).toBeGreaterThan(0);
+      expect(s.name).toBeDefined();
+      expect(s.category).toBeDefined();
+    }
+  });
 });

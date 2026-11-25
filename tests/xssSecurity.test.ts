@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { escapeHtml } from '../src/utils';
-import { validateCustomScenarioJSON, createDefaultCustomScenario } from '../src/scenarioConfig';
+import { validateCustomScenarioJSON, createDefaultCustomScenario, convertCustomScenarioToConfig } from '../src/scenarioConfig';
+import { validatePlaylist } from '../src/playlist';
 
 describe('Phase 1 — Critical Security Hardening & XSS Prevention', () => {
   describe('escapeHtml utility', () => {
@@ -70,6 +71,67 @@ describe('Phase 1 — Critical Security Hardening & XSS Prevention', () => {
       const res = validateCustomScenarioJSON(maliciousJson);
       expect(res.valid).toBe(false);
       expect(res.errors).toContain('Disallowed property detected in scenario payload');
+    });
+
+    it('rejects custom scenario with malicious or non-allowlisted category', () => {
+      const sc = createDefaultCustomScenario('retaliatory_duel');
+      sc.category = '<img src=x onerror=alert(1)>' as any;
+      const res = validateCustomScenarioJSON(sc);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some(e => e.includes('Invalid scenario category'))).toBe(true);
+    });
+
+    it('rejects custom scenario ID with attribute breakout or disallowed characters', () => {
+      const sc = createDefaultCustomScenario('retaliatory_duel');
+      sc.id = 'custom_x" onfocus="alert(1)" autofocus="';
+      const res = validateCustomScenarioJSON(sc);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some(e => e.includes('alphanumeric characters, underscores, or hyphens'))).toBe(true);
+
+      sc.id = 'custom_<script>bad</script>';
+      const resScript = validateCustomScenarioJSON(sc);
+      expect(resScript.valid).toBe(false);
+    });
+
+    it('validates playlist IDs against attribute breakout patterns', () => {
+      const badPlaylist = {
+        id: 'playlist_1" onmouseover="alert(1)',
+        name: 'Exploit Playlist',
+        entries: [{ id: 'e1', scenarioId: 'flick-static', durationSec: 30 }],
+      };
+      const res = validatePlaylist(badPlaylist);
+      expect(res.valid).toBe(false);
+      expect(res.errors.some(e => e.includes('Playlist ID must contain only alphanumeric'))).toBe(true);
+    });
+
+    it('DOM rendering neutralizes malicious scenario properties on scenario cards', () => {
+      const sc = createDefaultCustomScenario('retaliatory_duel');
+      sc.id = 'custom_valid_1';
+      sc.name = '<script>alert("name")</script>';
+      sc.description = '<img src=x onerror="alert(\'desc\')">';
+      sc.category = 'flick';
+
+      const config = convertCustomScenarioToConfig(sc);
+
+      // Render simulated card template equivalent to UI L838-872
+      const cardHtml = `
+        <div class="card scenario-card" data-scen="${escapeHtml(config.id)}">
+          <span class="badge badge-red">${escapeHtml(config.category)}</span>
+          <div class="scenario-card-title">${escapeHtml(config.name)}</div>
+          <p class="scenario-card-desc">${escapeHtml(config.description)}</p>
+          <button class="btn btn-primary btn-sm" data-play-custom="${escapeHtml(config.id)}">PLAY</button>
+        </div>
+      `;
+
+      const div = document.createElement('div');
+      div.innerHTML = cardHtml;
+
+      // Ensure no script elements or onerror attributes exist in DOM
+      expect(div.querySelector('script')).toBeNull();
+      expect(div.innerHTML).not.toContain('<script>');
+      expect(div.innerHTML).not.toContain('<img');
+      expect(div.innerHTML).toContain('&lt;script&gt;');
+      expect(div.innerHTML).toContain('&lt;img src=x');
     });
   });
 });
