@@ -41,6 +41,12 @@ export interface SpawnerConfig {
 
 export type TargetKind = 'standard' | 'enemy' | 'friend';
 
+export type BotPersonalityId =
+  | 'strafe_specialist'
+  | 'tactical_peeker'
+  | 'evasive_bot'
+  | 'duelist';
+
 export interface TargetConfig {
   hp?: number;
   multiShot?: boolean;   // if true: requires multiple hits to eliminate (spray-control dummy pattern)
@@ -52,6 +58,7 @@ export interface TargetConfig {
   };
   headshotOnly?: boolean;
   kind?: TargetKind;
+  personality?: BotPersonalityId;
   isFriendOrFoe?: boolean;
   fakePeekChance?: number;
   peekDurationSec?: number;
@@ -59,6 +66,8 @@ export interface TargetConfig {
   retaliatory?: boolean;
   retaliateDelayMs?: number;
   retaliationPenalty?: number;
+  retaliateRepeat?: boolean;
+  retaliateBurstIntervalMs?: number;
   shielded?: boolean;
 }
 
@@ -386,10 +395,13 @@ export interface WarmupLabScenarioV1 {
     headLevel?: boolean;
     headshotOnly?: boolean;
     isFriendOrFoe?: boolean;
+    personality?: BotPersonalityId;
     fakePeekChance?: number;
     retaliatory?: boolean;
     retaliateDelayMs?: number;
     retaliationPenalty?: number;
+    retaliateRepeat?: boolean;
+    retaliateBurstIntervalMs?: number;
     shielded?: boolean;
   };
   weapon?: {
@@ -588,6 +600,7 @@ export interface KillEventPayload {
 
 export type MissReason =
   | 'aim_miss'
+  | 'overkill'
   | 'early_shot'
   | 'fake_peek'
   | 'friendly_fire'

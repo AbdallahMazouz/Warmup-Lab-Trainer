@@ -1572,6 +1572,7 @@ export interface DifficultyPreset {
   speedMultiplier: number;
   directionChangeMultiplier: number;
   targetLifetimeMultiplier?: number;
+  retaliateDelayMultiplier?: number;
 }
 
 export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
@@ -1581,6 +1582,7 @@ export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
     speedMultiplier: 0.75,
     directionChangeMultiplier: 0.7,
     targetLifetimeMultiplier: 1.3,
+    retaliateDelayMultiplier: 1.35,
   },
   intermediate: {
     difficulty: 'intermediate',
@@ -1588,6 +1590,7 @@ export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
     speedMultiplier: 1.0,
     directionChangeMultiplier: 1.0,
     targetLifetimeMultiplier: 1.0,
+    retaliateDelayMultiplier: 1.0,
   },
   advanced: {
     difficulty: 'advanced',
@@ -1595,6 +1598,7 @@ export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
     speedMultiplier: 1.35,
     directionChangeMultiplier: 1.35,
     targetLifetimeMultiplier: 0.75,
+    retaliateDelayMultiplier: 0.70,
   },
   pro: {
     difficulty: 'pro',
@@ -1602,6 +1606,7 @@ export const DIFFICULTY_PRESETS: Record<DifficultyId, DifficultyPreset> = {
     speedMultiplier: 1.6,
     directionChangeMultiplier: 1.6,
     targetLifetimeMultiplier: 0.6,
+    retaliateDelayMultiplier: 0.50,
   },
 };
 
@@ -1666,6 +1671,12 @@ export function applyDifficultyPreset(
     ? Math.max(0.3, Math.min(10.0, pristine.targetLifetimeSec * (preset.targetLifetimeMultiplier ?? 1)))
     : undefined;
 
+  const baseTarget = pristine.target || baseConfig.target;
+  let target = baseTarget ? { ...baseTarget } : undefined;
+  if (target && typeof target.retaliateDelayMs === 'number' && preset.retaliateDelayMultiplier) {
+    target.retaliateDelayMs = Math.max(150, Math.round(target.retaliateDelayMs * preset.retaliateDelayMultiplier));
+  }
+
   return {
     ...pristine,
     ...baseConfig,
@@ -1673,5 +1684,6 @@ export function applyDifficultyPreset(
     targetSpeedMultiplier: Number(speed.toFixed(2)),
     directionChangeMultiplier: Number(dirChange.toFixed(2)),
     targetLifetimeSec: lifetime !== undefined ? Number(lifetime.toFixed(2)) : undefined,
+    target,
   };
 }

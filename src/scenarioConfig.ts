@@ -14,7 +14,9 @@ import type {
   SpawnerMode,
   MovementPattern,
   WarmupLabScenarioV1,
+  BotPersonalityId,
 } from './types';
+import { VALID_BOT_PERSONALITIES } from './botPersonalities';
 import {
   SCORE_HIT,
   SCORE_HEADSHOT,
@@ -28,11 +30,15 @@ export interface ValidationResult {
   errors: string[];
 }
 
+export interface ResolvedTargetConfig extends Required<Omit<TargetConfig, 'personality'>> {
+  personality?: BotPersonalityId;
+}
+
 export interface ResolvedScenarioConfig extends ScenarioConfig {
   environment: Required<EnvironmentConfig>;
   weapon: Required<WeaponConfig>;
   spawner: Required<SpawnerConfig>;
-  target: Required<TargetConfig>;
+  target: ResolvedTargetConfig;
   interaction: Required<InteractionConfig>;
   scoring: Required<ScoringConfig>;
   end: Required<EndConditionConfig>;
@@ -153,7 +159,7 @@ export function resolveScenarioConfig(raw: ScenarioConfig): ResolvedScenarioConf
   const maxAlive = rawSpawner?.maxAlive ?? raw.targetCount ?? 1;
   const initialTargetCount = rawSpawner?.initialTargetCount ?? maxAlive;
   const respawnOnKill = rawSpawner?.respawnOnKill ?? (spawnerMode !== 'wave' && spawnerMode !== 'peek');
-  const respawnDelayMs = rawSpawner?.respawnDelayMs ?? 0;
+  const respawnDelayMs = rawSpawner?.respawnDelayMs ?? (raw.id === 'spray-control' ? 80 : 0);
   const targetLifetimeSec = rawSpawner?.targetLifetimeSec ?? (rawSpawner?.targetLifetimeMs ? rawSpawner.targetLifetimeMs / 1000 : (raw.targetLifetimeSec ?? 0));
   const targetLifetimeMs = rawSpawner?.targetLifetimeMs ?? (targetLifetimeSec > 0 ? Math.round(targetLifetimeSec * 1000) : 0);
 
@@ -177,7 +183,7 @@ export function resolveScenarioConfig(raw: ScenarioConfig): ResolvedScenarioConf
   };
 
   // Target fallback
-  const target: Required<TargetConfig> = {
+  const target: ResolvedTargetConfig = {
     hp: raw.target?.hp ?? (raw.id === 'spray-control' ? 400 : 100),
     multiShot: raw.target?.multiShot ?? (raw.id === 'spray-control'),
     shape: raw.target?.shape ?? (raw.id.startsWith('aimlab-') || raw.id.startsWith('kovaaks-') ? 'sphere' : 'humanoid'),
@@ -188,6 +194,7 @@ export function resolveScenarioConfig(raw: ScenarioConfig): ResolvedScenarioConf
     },
     headshotOnly: raw.target?.headshotOnly ?? (raw.id === 'headline'),
     kind: raw.target?.kind ?? 'standard',
+    personality: raw.target?.personality,
     isFriendOrFoe: raw.target?.isFriendOrFoe ?? (raw.id === 'friend-or-foe'),
     fakePeekChance: raw.target?.fakePeekChance ?? (raw.id === 'jiggle-reading' ? 0.5 : 0),
     peekDurationSec: raw.target?.peekDurationSec ?? 0.8,
@@ -195,6 +202,8 @@ export function resolveScenarioConfig(raw: ScenarioConfig): ResolvedScenarioConf
     retaliatory: raw.target?.retaliatory ?? (raw.id.includes('skirmish') || raw.id === 'tactical-skirmish'),
     retaliateDelayMs: raw.target?.retaliateDelayMs ?? 850,
     retaliationPenalty: raw.target?.retaliationPenalty ?? 250,
+    retaliateRepeat: raw.target?.retaliateRepeat ?? Boolean(raw.id.includes('skirmish') || raw.id === 'tactical-skirmish'),
+    retaliateBurstIntervalMs: raw.target?.retaliateBurstIntervalMs ?? 600,
     shielded: raw.target?.shielded ?? false,
   };
 
@@ -391,6 +400,12 @@ export function validateCustomScenarioJSON(input: unknown): ValidationResult {
     if (s.target.speedMultiplier !== undefined && (typeof s.target.speedMultiplier !== 'number' || s.target.speedMultiplier < 0 || s.target.speedMultiplier > 4.0)) {
       errors.push('target.speedMultiplier must be between 0 and 4.0');
     }
+    if (s.target.multiShot !== undefined && typeof s.target.multiShot !== 'boolean') {
+      errors.push('target.multiShot must be a boolean');
+    }
+    if (s.target.personality !== undefined && !VALID_BOT_PERSONALITIES.includes(s.target.personality)) {
+      errors.push(`Invalid target personality: "${s.target.personality}". Supported: ${VALID_BOT_PERSONALITIES.join(', ')}`);
+    }
   }
 
   if (s.weapon && s.weapon.preset && !VALID_WEAPONS.includes(s.weapon.preset)) {
@@ -450,6 +465,7 @@ export function convertCustomScenarioToConfig(custom: WarmupLabScenarioV1): Scen
     target: {
       shape: custom.target.shape,
       hp: custom.target.hp,
+      personality: custom.target.personality,
       multiShot: custom.target.multiShot,
       sizeMultiplier: custom.target.sizeMultiplier ?? 1.0,
       headshotOnly: custom.target.headshotOnly,
@@ -458,6 +474,8 @@ export function convertCustomScenarioToConfig(custom: WarmupLabScenarioV1): Scen
       retaliatory: custom.target.retaliatory,
       retaliateDelayMs: custom.target.retaliateDelayMs,
       retaliationPenalty: custom.target.retaliationPenalty,
+      retaliateRepeat: custom.target.retaliateRepeat,
+      retaliateBurstIntervalMs: custom.target.retaliateBurstIntervalMs,
       shielded: custom.target.shielded,
     },
     weapon: custom.weapon ? {
@@ -549,6 +567,7 @@ export function hasMaterialConfigChanges(
   if (Boolean(t1.retaliatory) !== Boolean(t2.retaliatory)) return true;
   if (t1.retaliateDelayMs !== t2.retaliateDelayMs) return true;
   if (t1.retaliationPenalty !== t2.retaliationPenalty) return true;
+  if (t1.personality !== t2.personality) return true;
 
   // Weapon constraints
   const w1 = original.weapon;

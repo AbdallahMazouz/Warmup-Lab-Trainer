@@ -519,6 +519,11 @@ export class Engine {
       effectiveRay = cloned;
     }
 
+    if (this.resolvedConfig?.interaction.mode === 'track') {
+      // In tracking scenarios, targets remain alive while being tracked; clicks do not eliminate targets
+      return;
+    }
+
     const hasCover = Boolean(
       this.resolvedConfig?.environment.customCover ||
       this.activeConfig?.id.includes('peek') ||
@@ -534,12 +539,6 @@ export class Engine {
       if (!hitTarget || !hitTarget.alive) return;
 
       const hitPos = { x: hitTarget.position.x, y: hitTarget.position.y, z: hitTarget.position.z };
-
-      // Overkill attempt on dead target
-      if (hitTarget.hp !== undefined && hitTarget.hp <= 0) {
-        this.overkillShots++;
-        return;
-      }
 
       // Friendly target hit (Friend or Foe scenario)
       if (hitTarget.kind === 'friend') {
@@ -633,8 +632,15 @@ export class Engine {
         damage = this.currentWeapon.damage.body;
       }
 
-      // Target disappears after every hit
-      const remainingHp = 0;
+      // Multi-shot target handling (e.g. spray-control dummy with 400 HP)
+      const isMultiShot = Boolean(this.resolvedConfig?.target.multiShot);
+      const currentHp = typeof hitTarget.hp === 'number' ? hitTarget.hp : (this.resolvedConfig?.target.hp ?? 100);
+      const isLethal = !isMultiShot || (currentHp - damage <= 0);
+      const remainingHp = isLethal ? 0 : Math.max(0, currentHp - damage);
+      if (isMultiShot) {
+        hitTarget.hp = remainingHp;
+      }
+
       const hitPayload: HitEventPayload = {
         targetId: hit.targetId,
         hitZone: hit.bodyPart ?? 'head',
@@ -646,13 +652,23 @@ export class Engine {
         accuracyScore: hit.accuracyScore,
       };
 
+      this.score += pts;
+
+      if (!isLethal) {
+        // Non-lethal hit on multi-shot target: provide hit feedback and reduce HP without removing target
+        this.renderer.flashTarget(hit.targetId);
+        this.audio.playHit();
+        this.events.emit('onHit', hitPayload);
+        if (hit.headshot) {
+          this.events.emit('onHeadshot', hitPayload as HeadshotEventPayload);
+        }
+        return;
+      }
+
       this.currentKillStreak++;
       const currentStreak = this.currentKillStreak;
 
-      this.score += pts;
-      this.renderer.flashTarget(hit.targetId);
-
-      // Immediate removal from active gameplay and scene
+      // Immediate visual removal from scene and active targets
       this.targets.removeTarget(hit.targetId);
       this.spawner.onTargetKilled(hit.targetId, hitPos);
 
@@ -677,12 +693,18 @@ export class Engine {
         this.completeScenario();
       }
     } else {
+      const isOverkill = this.targets.checkOverkill(effectiveRay, now);
+      if (isOverkill) {
+        this.overkillShots++;
+      } else {
+        this.targets.handleNearMiss(effectiveRay, now);
+      }
       this.misses++;
       const missPen = this.resolvedConfig?.scoring.missPenalty ?? (this.activeConfig.penalizeMiss ? SCORE_MISS : 0);
       if (missPen !== 0) {
         this.score = Math.max(0, this.score + missPen);
       }
-      this.events.emit('onMiss', { reason: 'aim_miss', penalty: missPen });
+      this.events.emit('onMiss', { reason: isOverkill ? 'overkill' : 'aim_miss', penalty: missPen });
     }
   }
 

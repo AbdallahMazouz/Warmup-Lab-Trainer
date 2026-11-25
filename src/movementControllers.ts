@@ -4,6 +4,7 @@
 
 import * as THREE from 'three';
 import { HEAD_LEVEL_Y } from './constants';
+import type { BotPersonalityId } from './types';
 
 // ── Arena Cover Boxes (Geometry matches Renderer.buildArena) ───────────
 export interface ArenaCoverBox {
@@ -179,6 +180,9 @@ export interface TacticalStrafeState {
   deadstopDuration: number;
   minX: number;
   maxX: number;
+  personality?: BotPersonalityId;
+  strafeCount?: number;
+  feintChance?: number;
 }
 
 export interface CoverPeekState {
@@ -197,6 +201,7 @@ export interface CoverPeekState {
   retreatSpeed: number;
   exposedDuelDuration: number;
   hiddenDuration: number;
+  personality?: BotPersonalityId;
 }
 
 export interface SmoothSteeringState {
@@ -225,6 +230,7 @@ export interface MobilityState {
   stateTimer: number;
   strafeDir: 1 | -1;
   driftSpeed: number;
+  personality?: BotPersonalityId;
 }
 
 export type TargetControllerState =
@@ -255,7 +261,16 @@ export function updateTacticalStrafe(
       if (state.currentSpeed >= state.cruiseSpeed) {
         state.currentSpeed = state.cruiseSpeed;
         state.state = 'cruising';
-        state.stateTimer = state.minStrafeDuration + rng() * (state.maxStrafeDuration - state.minStrafeDuration);
+        state.strafeCount = (state.strafeCount ?? 0) + 1;
+        if (state.personality === 'strafe_specialist') {
+          // Alternating rhythm: even count = short juke, odd count = wide sweep
+          const isShort = (state.strafeCount % 2 === 0);
+          state.stateTimer = isShort
+            ? state.minStrafeDuration * (0.8 + rng() * 0.4)
+            : state.maxStrafeDuration * (0.8 + rng() * 0.4);
+        } else {
+          state.stateTimer = state.minStrafeDuration + rng() * (state.maxStrafeDuration - state.minStrafeDuration);
+        }
       }
       break;
 
@@ -277,8 +292,21 @@ export function updateTacticalStrafe(
     case 'deadstop':
       state.currentSpeed = 0;
       if (state.stateTimer <= 0) {
-        // Reverse direction and accelerate
-        state.direction = (state.direction === 1 ? -1 : 1);
+        // Human-like strafe direction selection: boundary protection + probabilistic feint
+        const nearMin = pos.x <= state.minX + 0.8;
+        const nearMax = pos.x >= state.maxX - 0.8;
+        if (nearMin) {
+          state.direction = 1;
+        } else if (nearMax) {
+          state.direction = -1;
+        } else {
+          // Standard reversal vs feint in same direction
+          const feintProb = state.feintChance ?? 0.25;
+          const isFeint = rng() < feintProb;
+          if (!isFeint) {
+            state.direction = (state.direction === 1 ? -1 : 1);
+          }
+        }
         state.state = 'accelerating';
       }
       break;
@@ -353,7 +381,54 @@ export function updateCoverPeek(
       if (state.peekProgress <= 0.0) {
         state.peekProgress = 0.0;
         state.state = 'hidden';
-        state.stateTimer = state.hiddenDuration * (0.8 + rng() * 0.4);
+        if (state.personality === 'tactical_peeker') {
+          // Tactical Peeker: 40% quick re-peek, 60% patient angle reset
+          const isQuick = rng() < 0.40;
+          state.stateTimer = isQuick ? (0.18 + rng() * 0.12) : state.hiddenDuration * (0.8 + rng() * 0.4);
+        } else {
+          state.stateTimer = state.hiddenDuration * (0.8 + rng() * 0.4);
+        }
+
+        // Dynamic exposure depth & duel duration variation for the next peek cycle
+        const box = ARENA_COVER_BOXES.find(b => b.id === state.boxId);
+        if (box) {
+          let displacement: number;
+          let duelDuration: number;
+          if (state.mode === 'wideswing') {
+            displacement = 1.6 + rng() * 0.6;
+            duelDuration = 0.5 + rng() * 0.3;
+          } else if (state.personality === 'tactical_peeker') {
+            // Tactical Peeker profile: 35% shoulder bait, 25% wide swing, 40% standard slice
+            const roll = rng();
+            if (roll < 0.35) {
+              displacement = 0.32;
+              duelDuration = 0.20;
+            } else if (roll < 0.60) {
+              displacement = 1.95;
+              duelDuration = 0.65;
+            } else {
+              displacement = 0.85;
+              duelDuration = 0.45;
+            }
+          } else {
+            const roll = rng();
+            if (roll < 0.25) {
+              // Shoulder bait / feint
+              displacement = 0.35;
+              duelDuration = 0.22;
+            } else if (roll < 0.45) {
+              // Wide swing
+              displacement = 1.85;
+              duelDuration = 0.60;
+            } else {
+              // Standard peek
+              displacement = 0.85;
+              duelDuration = 0.45;
+            }
+          }
+          state.exposedX = getCoverExposedX(box, state.side, state.anchorZ, displacement);
+          state.exposedDuelDuration = duelDuration;
+        }
       }
       pos.x = state.hiddenX + (state.exposedX - state.hiddenX) * state.peekProgress;
       break;

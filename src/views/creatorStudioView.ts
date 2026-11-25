@@ -260,7 +260,7 @@ export function renderCreatorStudioHTML(
                 </div>
               </div>
 
-              <div class="grid-3" style="gap:12px;">
+              <div class="grid-4" style="gap:12px;">
                 <div>
                   <label class="form-label" style="font-size:0.78rem; color:var(--text-dim); text-transform:uppercase; display:block; margin-bottom:4px;">
                     Movement Pattern
@@ -288,12 +288,30 @@ export function renderCreatorStudioHTML(
                   </label>
                   <input type="number" id="studio-fake-peek" min="0.0" max="1.0" step="0.05" value="${target.fakePeekChance ?? 0.0}" class="form-input" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:6px 10px; font-size:0.9rem;" />
                 </div>
+                <div>
+                  <label class="form-label" style="font-size:0.78rem; color:var(--text-dim); text-transform:uppercase; display:block; margin-bottom:4px;">
+                    Bot Personality
+                  </label>
+                  <select id="studio-bot-personality" class="form-select" style="width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--border-2); border-radius:var(--r-sm); padding:6px 10px; font-size:0.9rem;">
+                    <option value="" ${!target.personality ? 'selected' : ''}>Auto / Generic</option>
+                    <option value="strafe_specialist" ${target.personality === 'strafe_specialist' ? 'selected' : ''}>Strafe Specialist</option>
+                    <option value="tactical_peeker" ${target.personality === 'tactical_peeker' ? 'selected' : ''}>Tactical Peeker</option>
+                    <option value="evasive_bot" ${target.personality === 'evasive_bot' ? 'selected' : ''}>Evasive Bot</option>
+                    <option value="duelist" ${target.personality === 'duelist' ? 'selected' : ''}>Duelist</option>
+                  </select>
+                </div>
               </div>
 
               <div style="margin-top:10px;">
                 <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; cursor:pointer;">
                   <input type="checkbox" id="studio-head-level" ${target.headLevel ? 'checked' : ''} />
                   <span>Lock Targets to Valorant Crosshair Head-Level</span>
+                </label>
+              </div>
+              <div style="margin-top:8px;">
+                <label style="display:flex; align-items:center; gap:8px; font-size:0.85rem; cursor:pointer;">
+                  <input type="checkbox" id="studio-multi-shot" ${target.multiShot ? 'checked' : ''} />
+                  <span>Multi-Shot Target (Absorbs damage across multiple hits until HP reaches zero)</span>
                 </label>
               </div>
             </div>
@@ -451,7 +469,10 @@ export function updateStudioLiveInspector(
     }
 
     const kpiTargets = container.querySelector('#studio-kpi-targets');
-    if (kpiTargets) kpiTargets.textContent = `${s.spawner.maxAlive} targets (${s.target.movementPattern})`;
+    if (kpiTargets) {
+      const personalityLabel = s.target.personality ? ` · ${s.target.personality.replace('_', ' ')}` : '';
+      kpiTargets.textContent = `${s.spawner.maxAlive} targets (${s.target.movementPattern}${personalityLabel})`;
+    }
 
     const kpiWeapon = container.querySelector('#studio-kpi-weapon');
     if (kpiWeapon) kpiWeapon.textContent = `${weapon.preset.toUpperCase()} ${weapon.requireCounterStrafe ? '(CS Enforced)' : ''}`;
@@ -493,11 +514,13 @@ export function attachCreatorStudioListeners(
 
       const targetShape = (container.querySelector('#studio-target-shape') as HTMLSelectElement)?.value as any || 'sphere';
       const targetHp = parseInt((container.querySelector('#studio-target-hp') as HTMLInputElement)?.value || '100', 10);
+      const multiShot = (container.querySelector('#studio-multi-shot') as HTMLInputElement)?.checked ?? false;
       const targetSize = parseFloat((container.querySelector('#studio-target-size') as HTMLInputElement)?.value || '1.0');
       const movePattern = (container.querySelector('#studio-movement-pattern') as HTMLSelectElement)?.value as any || 'static';
       const speedMult = parseFloat((container.querySelector('#studio-speed-multiplier') as HTMLInputElement)?.value || '0.0');
       const headLevel = (container.querySelector('#studio-head-level') as HTMLInputElement)?.checked ?? false;
       const fakePeek = parseFloat((container.querySelector('#studio-fake-peek') as HTMLInputElement)?.value || '0.0');
+      const botPersonality = ((container.querySelector('#studio-bot-personality') as HTMLSelectElement)?.value || undefined) as any;
 
       const retaliatory = (container.querySelector('#studio-retaliation') as HTMLInputElement)?.checked ?? false;
       const retaliateDelay = parseInt((container.querySelector('#studio-retaliate-delay') as HTMLInputElement)?.value || '800', 10);
@@ -535,11 +558,13 @@ export function attachCreatorStudioListeners(
           ...state.editingScenario.target,
           shape: targetShape,
           hp: targetHp,
+          multiShot,
           sizeMultiplier: targetSize,
           movementPattern: movePattern,
           speedMultiplier: speedMult,
           headLevel,
           fakePeekChance: fakePeek > 0 ? fakePeek : undefined,
+          personality: botPersonality,
           retaliatory,
           retaliateDelayMs: retaliateDelay,
           retaliationPenalty: retaliatePenalty,

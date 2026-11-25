@@ -16,7 +16,8 @@ import {
   TARGET_LEGS_HEIGHT,
   TARGET_LEGS_OFFSET_Y,
 } from './constants';
-import type { MovementPattern, HitResult, ScenarioConfig, BodyPartType, HitRegionDimensions, TargetKind } from './types';
+import type { MovementPattern, HitResult, ScenarioConfig, BodyPartType, HitRegionDimensions, TargetKind, BotPersonalityId } from './types';
+import { resolveBotPersonality, getPersonalityProfile } from './botPersonalities';
 import {
   ARENA_COVER_BOXES,
   intersectRayCoverBoxes,
@@ -68,9 +69,20 @@ export interface ActiveTarget {
   retaliatory?: boolean;
   retaliateDelayMs?: number;
   retaliationPenalty?: number;
+  retaliateRepeat?: boolean;
+  retaliateBurstIntervalMs?: number;
   timeVisibleMs?: number;
   hasRetaliated?: boolean;
+  personality?: BotPersonalityId;
+  lastReactionTime?: number;
   shielded?: boolean;
+}
+
+export interface RecentlyKilledTarget {
+  id: string;
+  position: THREE.Vector3;
+  dimensions: HitRegionDimensions;
+  killedAt: number;
 }
 
 export interface TargetRayIntersection {
@@ -116,6 +128,7 @@ export class TargetManager {
   public onTargetRetaliate?: (target: ActiveTarget) => void;
   private renderer?: TargetRenderer;
   private targets = new Map<string, ActiveTarget>();
+  private recentlyKilled: RecentlyKilledTarget[] = [];
   private nextId = 1;
   private rng: () => number;
   private _vHeadCenter = new THREE.Vector3();
@@ -128,6 +141,7 @@ export class TargetManager {
 
   clear(): void {
     this.targets.clear();
+    this.recentlyKilled = [];
     if (this.renderer && typeof this.renderer.clearTargets === 'function') {
       this.renderer.clearTargets();
     }
@@ -431,6 +445,36 @@ export class TargetManager {
       }
     }
 
+    const personality = resolveBotPersonality(
+      config.target?.personality,
+      config.id,
+      pattern,
+      config.target?.retaliatory
+    );
+    const profile = personality ? getPersonalityProfile(personality, config.difficulty) : undefined;
+
+    if (controllerState) {
+      if (controllerState.type === 'tactical_strafe') {
+        controllerState.personality = personality;
+        if (profile?.strafeRhythm) {
+          controllerState.deadstopDuration = Math.max(0.10, profile.strafeRhythm.deadstopDuration / dirMult);
+          controllerState.feintChance = profile.strafeRhythm.feintChance;
+          if (personality === 'strafe_specialist') {
+            controllerState.minStrafeDuration = profile.strafeRhythm.shortBurstDuration[0] / dirMult;
+            controllerState.maxStrafeDuration = profile.strafeRhythm.longSweepDuration[1] / dirMult;
+          }
+        }
+      } else if (controllerState.type === 'cover_peek') {
+        controllerState.personality = personality;
+      } else if (controllerState.type === 'mobility') {
+        controllerState.personality = personality;
+        if (profile?.mobility) {
+          controllerState.jumpImpulse = profile.mobility.jumpImpulse * config.targetSpeedMultiplier;
+          controllerState.driftSpeed = profile.mobility.driftSpeed * config.targetSpeedMultiplier;
+        }
+      }
+    }
+
     const target: ActiveTarget = {
       id,
       position: pos.clone(),
@@ -456,9 +500,12 @@ export class TargetManager {
       hp: config.target?.hp,
       maxHp: config.target?.hp,
       kind: config.target?.kind,
-      retaliatory: Boolean(config.target?.retaliatory || config.id.includes('skirmish') || config.id === 'tactical-skirmish'),
+      personality,
+      retaliatory: Boolean(config.target?.retaliatory || config.id.includes('skirmish') || config.id === 'tactical-skirmish' || personality === 'duelist'),
       retaliateDelayMs: config.target?.retaliateDelayMs ?? 850,
       retaliationPenalty: config.target?.retaliationPenalty ?? 250,
+      retaliateRepeat: config.target?.retaliateRepeat ?? Boolean(config.id.includes('skirmish') || config.id === 'tactical-skirmish' || personality === 'duelist'),
+      retaliateBurstIntervalMs: config.target?.retaliateBurstIntervalMs ?? (profile?.retaliateBurstIntervalMs ?? 600),
       timeVisibleMs: 0,
       hasRetaliated: false,
       shielded: Boolean(config.target?.shielded),
@@ -588,14 +635,19 @@ export class TargetManager {
       const inLos = this.hasLineOfSight(target, playerPos);
       if (target.alive && target.retaliatory && inLos && !target.shielded) {
         target.timeVisibleMs = (target.timeVisibleMs || 0) + dt * 1000;
-        if (!target.hasRetaliated && target.timeVisibleMs >= (target.retaliateDelayMs || 850)) {
-          target.hasRetaliated = true;
-          if (this.onTargetRetaliate) {
-            this.onTargetRetaliate(target);
+        const delay = target.retaliateDelayMs || 850;
+        if (target.timeVisibleMs >= delay) {
+          if (!target.hasRetaliated || target.retaliateRepeat) {
+            target.hasRetaliated = true;
+            target.timeVisibleMs = delay - (target.retaliateBurstIntervalMs || 600);
+            if (this.onTargetRetaliate) {
+              this.onTargetRetaliate(target);
+            }
           }
         }
       } else if (!inLos) {
         target.timeVisibleMs = 0;
+        target.hasRetaliated = false;
       }
 
       this.renderer?.updateTargetPosition(id, target.position);
@@ -636,9 +688,16 @@ export class TargetManager {
   getHighestThreatProgress(playerPos?: THREE.Vector3): number {
     let highest = 0;
     for (const target of this.targets.values()) {
-      if (target.alive && target.retaliatory && !target.shielded && !target.hasRetaliated && this.hasLineOfSight(target, playerPos)) {
+      if (target.alive && target.retaliatory && !target.shielded && (!target.hasRetaliated || target.retaliateRepeat) && this.hasLineOfSight(target, playerPos)) {
         const delay = target.retaliateDelayMs || 850;
-        const prog = Math.min(1, (target.timeVisibleMs || 0) / delay);
+        let prog: number;
+        if (!target.hasRetaliated) {
+          prog = Math.min(1, (target.timeVisibleMs || 0) / delay);
+        } else {
+          const burst = target.retaliateBurstIntervalMs || 600;
+          const burstBase = delay - burst;
+          prog = Math.min(1, Math.max(0, ((target.timeVisibleMs || 0) - burstBase) / burst));
+        }
         if (prog > highest) highest = prog;
       }
     }
@@ -649,8 +708,214 @@ export class TargetManager {
     const target = this.targets.get(id);
     if (target) {
       target.alive = false;
+      this.recentlyKilled.push({
+        id: target.id,
+        position: target.position.clone(),
+        dimensions: { ...target.dimensions },
+        killedAt: performance.now(),
+      });
+      if (this.recentlyKilled.length > 20) {
+        this.recentlyKilled.shift();
+      }
       this.targets.delete(id);
       this.renderer?.removeTarget(id);
+    }
+  }
+
+  /**
+   * Checks if a ray intersects any recently eliminated target within windowMs.
+   * Enables accurate overkill tracking without retaining dead meshes in the scene.
+   */
+  checkOverkill(ray: THREE.Ray, now = performance.now(), windowMs = 350): boolean {
+    this.recentlyKilled = this.recentlyKilled.filter(k => now - k.killedAt <= windowMs);
+    for (const killed of this.recentlyKilled) {
+      const headCenter = new THREE.Vector3(
+        killed.position.x,
+        killed.position.y + (killed.dimensions.headOffsetY ?? 0),
+        killed.position.z
+      );
+      const toHead = new THREE.Vector3().subVectors(headCenter, ray.origin);
+      const proj = toHead.dot(ray.direction);
+      if (proj > 0) {
+        const perpDistSq = toHead.lengthSq() - proj * proj;
+        if (perpDistSq <= killed.dimensions.headRadius * killed.dimensions.headRadius) {
+          return true;
+        }
+      }
+      if (killed.dimensions.shape !== 'sphere') {
+        const torsoHit = this.intersectCylinder(
+          ray,
+          killed.position,
+          killed.dimensions.torsoOffsetY ?? 0,
+          killed.dimensions.torsoHeight ?? 0,
+          killed.dimensions.torsoRadius ?? 0
+        );
+        if (torsoHit) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Ray-cylinder intersection test for torso overkill detection.
+   */
+  private intersectCylinder(
+    ray: THREE.Ray,
+    pos: THREE.Vector3,
+    offsetY: number,
+    height: number,
+    radius: number
+  ): boolean {
+    if (radius <= 0 || height <= 0) return false;
+    const centerY = pos.y + offsetY;
+    const halfH = height / 2;
+    const yMin = centerY - halfH;
+    const yMax = centerY + halfH;
+    const radiusSq = radius * radius;
+
+    const ox = ray.origin.x - pos.x;
+    const oz = ray.origin.z - pos.z;
+    const dx = ray.direction.x;
+    const dz = ray.direction.z;
+
+    const a = dx * dx + dz * dz;
+
+    // Cylinder wall intersection in XZ plane
+    if (a > 1e-9) {
+      const b = ox * dx + oz * dz;
+      const c = ox * ox + oz * oz - radiusSq;
+      const disc = b * b - a * c;
+
+      if (disc >= 0) {
+        const sqrtDisc = Math.sqrt(disc);
+        const t1 = (-b - sqrtDisc) / a;
+        const t2 = (-b + sqrtDisc) / a;
+
+        for (const t of [t1, t2]) {
+          if (t > 0) {
+            const hitY = ray.origin.y + t * ray.direction.y;
+            if (hitY >= yMin && hitY <= yMax) {
+              return true;
+            }
+          }
+        }
+      }
+    }
+
+    // Top and bottom disk caps
+    if (Math.abs(ray.direction.y) > 1e-9) {
+      for (const capY of [yMin, yMax]) {
+        const t = (capY - ray.origin.y) / ray.direction.y;
+        if (t > 0) {
+          const hitX = ox + t * dx;
+          const hitZ = oz + t * dz;
+          if (hitX * hitX + hitZ * hitZ <= radiusSq) {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /**
+   * Evaluates near-miss shots against alive humanoid targets.
+   * If a bullet grazes within threshold metres of an eligible target,
+   * triggers an evasive maneuver (direction cut, retreat, or jump) with a 450ms cooldown.
+   */
+  handleNearMiss(ray: THREE.Ray, now = performance.now(), threshold = 0.65): void {
+    let closestTarget: ActiveTarget | null = null;
+    let closestDist = threshold;
+
+    for (const target of this.targets.values()) {
+      if (!target.alive) continue;
+      // Spheres and non-humanoids do not exhibit humanoid panic evasion
+      if (target.dimensions.shape === 'sphere') continue;
+      // Reaction cooldown (Evasive Bot has accelerated 320ms reaction cooldown)
+      const cooldownMs = target.personality === 'evasive_bot' ? 320 : 450;
+      if (target.lastReactionTime && now - target.lastReactionTime < cooldownMs) continue;
+
+      // Project target position onto ray
+      const toTarget = new THREE.Vector3().subVectors(target.position, ray.origin);
+      const proj = toTarget.dot(ray.direction);
+      // Target must be in front of the shot origin
+      if (proj <= 0) continue;
+
+      const dist = ray.distanceToPoint(target.position);
+      if (dist < closestDist) {
+        closestDist = dist;
+        closestTarget = target;
+      } else {
+        const headCenter = new THREE.Vector3(
+          target.position.x,
+          target.position.y + (target.dimensions.headOffsetY ?? 0),
+          target.position.z
+        );
+        const headDist = ray.distanceToPoint(headCenter);
+        if (headDist < closestDist) {
+          closestDist = headDist;
+          closestTarget = target;
+        }
+      }
+    }
+
+    if (closestTarget) {
+      closestTarget.lastReactionTime = now;
+      this.triggerBotEvasion(closestTarget);
+    }
+  }
+
+  private triggerBotEvasion(target: ActiveTarget): void {
+    if (target.controllerState) {
+      // Duelist: does not flee or panic retreat.
+      // Executes a sharp micro-repositioning counter-strafe cut while maintaining LOS and continuing retaliation
+      if (target.personality === 'duelist' && target.controllerState.type === 'tactical_strafe') {
+        const s = target.controllerState;
+        s.state = 'stopping';
+        s.direction = (s.direction === 1 ? -1 : 1);
+        return;
+      }
+
+      switch (target.controllerState.type) {
+        case 'tactical_strafe': {
+          const s = target.controllerState;
+          if (s.state === 'cruising' || s.state === 'accelerating') {
+            s.state = 'stopping';
+            s.direction = (s.direction === 1 ? -1 : 1);
+          }
+          break;
+        }
+        case 'cover_peek': {
+          const s = target.controllerState;
+          if (s.state === 'exposed_duel') {
+            s.state = 'retreating';
+            s.stateTimer = 0;
+          }
+          break;
+        }
+        case 'mobility': {
+          const s = target.controllerState;
+          if (s.state === 'ground_crouch') {
+            s.state = 'ascending';
+            s.vy = s.jumpImpulse;
+            s.stateTimer = 0;
+          } else if (s.state === 'ascending' || s.state === 'descending') {
+            // Airborne evasion: flip lateral drift
+            s.strafeDir = (s.strafeDir === 1 ? -1 : 1);
+          }
+          break;
+        }
+        case 'smooth_steering': {
+          const s = target.controllerState;
+          s.targetVx = -s.targetVx;
+          s.targetVz = -s.targetVz;
+          s.changeTimer = 0.5;
+          break;
+        }
+      }
     }
   }
 

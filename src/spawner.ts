@@ -198,8 +198,14 @@ export class Spawner {
     const totalCurrent = this.targets.getActiveCount() + this.pendingRespawns.length;
     if (totalCurrent >= spawner.maxAlive) return;
 
-    if (spawner.respawnDelayMs > 0) {
-      this.pendingRespawns.push({ spawnAt: performance.now() + spawner.respawnDelayMs });
+    // Preserve explicitly configured respawnDelayMs: 0.
+    // Built-in Spray Control retains an 80ms perceptual delay when delay is omitted.
+    const delay = typeof spawner.respawnDelayMs === 'number'
+      ? spawner.respawnDelayMs
+      : (this.config.id === 'spray-control' ? 80 : 0);
+
+    if (delay > 0) {
+      this.pendingRespawns.push({ spawnAt: performance.now() + delay });
     } else {
       this.spawnOneTarget();
     }
@@ -263,14 +269,24 @@ export class Spawner {
           pos = new THREE.Vector3(0, HEAD_LEVEL_Y, -12);
           break;
         }
-        let bestPt = points[0];
+
+        const validPoints = points.filter(pt =>
+          pt && typeof pt.x === 'number' && typeof pt.y === 'number' && typeof pt.z === 'number' &&
+          Number.isFinite(pt.x) && Number.isFinite(pt.y) && Number.isFinite(pt.z)
+        );
+
+        let candidatePoints = validPoints;
+        if (this.lastKilledPos && validPoints.length > 1) {
+          const nonKilled = validPoints.filter(pt => new THREE.Vector3(pt.x, pt.y, pt.z).distanceTo(this.lastKilledPos!) >= 1.0);
+          if (nonKilled.length > 0) {
+            candidatePoints = nonKilled;
+          }
+        }
+
+        let bestPt = candidatePoints[0] || points[0];
         let maxMinDist = -1;
 
-        for (const pt of points) {
-          if (!pt || typeof pt.x !== 'number' || typeof pt.y !== 'number' || typeof pt.z !== 'number' ||
-              !Number.isFinite(pt.x) || !Number.isFinite(pt.y) || !Number.isFinite(pt.z)) {
-            continue;
-          }
+        for (const pt of candidatePoints) {
           const v = new THREE.Vector3(pt.x, pt.y, pt.z);
           let minDist = Infinity;
           for (const t of this.targets.getTargets()) {
@@ -350,6 +366,9 @@ export class Spawner {
           const y = this.config.headLevel ? HEAD_LEVEL_Y : HEAD_LEVEL_Y + (this.rng() - 0.5) * 1.5;
           const cand = new THREE.Vector3(x, y, z);
           if (this.isPositionValid(cand, 1.8)) {
+            if (this.lastKilledPos && cand.distanceTo(this.lastKilledPos) < 2.0 && attempt < 12) {
+              continue;
+            }
             chosen = cand;
             break;
           }
@@ -381,6 +400,9 @@ export class Spawner {
             const z = -(11 + this.rng() * 7);
             const cand = new THREE.Vector3(x, HEAD_LEVEL_Y, z);
             if (this.isPositionValid(cand, 1.8)) {
+              if (this.lastKilledPos && cand.distanceTo(this.lastKilledPos) < 1.5 && attempt < 12) {
+                continue;
+              }
               chosen = cand;
               break;
             }
@@ -389,7 +411,7 @@ export class Spawner {
           pos = chosen;
         } else {
           const radius = spawner.spawnRadius || this.config.spawnRadius || 10;
-          let chosen = new THREE.Vector3(0, HEAD_LEVEL_Y, -10);
+          let chosen: THREE.Vector3 | null = null;
           for (let attempt = 0; attempt < 15; attempt++) {
             const angle = (this.rng() - 0.5) * Math.PI * 0.7; // ~126 degree front arc
             const dist = 6 + this.rng() * (radius - 4);
@@ -404,9 +426,8 @@ export class Spawner {
               chosen = cand;
               break;
             }
-            chosen = cand;
           }
-          pos = chosen;
+          pos = chosen ?? new THREE.Vector3(0, HEAD_LEVEL_Y, -10);
         }
         break;
       }
@@ -465,6 +486,7 @@ export class Spawner {
         retreatSpeed: 5.0 * this.config.targetSpeedMultiplier,
         exposedDuelDuration: isFake ? 0.08 : (targetCfg.peekDurationSec || 0.75),
         hiddenDuration: 0.3,
+        personality: spawned.personality,
       };
       if (this.callbacks.onTargetSpawned) {
         this.callbacks.onTargetSpawned(spawned);
